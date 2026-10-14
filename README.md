@@ -35,8 +35,9 @@ audio -> features -> sections -> prompts -> SD-Turbo images -> frame-level contr
 | 4. Load audio | file or a synthesized 30 s, 4-part demo track |
 | 5–7. Features | onset strength, beats, RMS, spectral centroid, low/mid/high band energy, **Demucs instrument stems + drum hits**, then smoothing, robust normalization and a 24 fps control timeline |
 | 8–9. Sections | change-point detection on an activity curve (equal-window fallback) plus a per-section summary |
-| 9.1 Vibe | CLAP zero-shot vibe (party / calm / dark / dreamy / epic) → prompt theme |
-| 10–11. GenAI | structure + vibe + feature-driven prompts and SD-Turbo generation, with images cached in `outputs/images/` |
+| 9.1 Vibe | CLAP zero-shot vibe (party / calm / dark / dreamy / epic) → prompt theme, plus instrument / texture tags |
+| 9.2 Song signature | tempo → number of star points, key mode → rounded petals vs sharp shards, drum share → tunnel rings vs spiral arms, instruments → materials, audio fingerprint → image seed |
+| 10–11. GenAI | song structure + vibe + section prompts; section 1 text-to-image, later sections image-to-image from the previous one; cached in `outputs/images/` |
 | 11.1 Layers | each image split into core / inner star / outer star (radial masks), line art (edges) and light spots |
 | 12–14. Render | polar-warp renderer that moves each image part with its own signal, then FFmpeg muxes in the original audio |
 | 15. Baseline | same images/effects, preset fixed-rate controls that never read the audio |
@@ -66,7 +67,7 @@ python3.13 -m venv .venv
       genai_audio_visualizer.ipynb --output-dir outputs/my_song --output notebook_run
   ```
 
-  Each song writes to its own folder, `outputs/<song_name>/` (videos, images, prompts, metrics, figures). Song audio and
+  Add `VIBE_OVERRIDE=dark` (party / calm / dark / dreamy / epic) to force a vibe. Each song writes to its own folder, `outputs/<song_name>/` (videos, images, prompts, metrics, figures). Song audio and
   song videos are git-ignored.
 
 ## Run on Google Colab

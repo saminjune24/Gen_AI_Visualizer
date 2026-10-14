@@ -68,6 +68,7 @@ if IN_COLAB:
 """)
 
 code(r"""
+import hashlib
 import json
 import os
 import re
@@ -163,7 +164,8 @@ STEM_PRESENCE   = 0.15        # a stem counts as "present" if its loud level is 
 
 # ---- Vibe (section 9.1) ------------------------------------------------------------------
 CLAP_MODEL    = "laion/clap-htsat-unfused"
-VIBE_OVERRIDE = None          # e.g. "calm" to force a vibe; None = detect it from the audio
+VIBE_OVERRIDE = os.environ.get("VIBE_OVERRIDE") or None   # e.g. "dark" to force a vibe; None = detect it
+DRIVE_THRESHOLD = 0.35        # drum share of stem energy above which the layout becomes "tunnel rings" (section 9.2)
 
 # ---- Sections -------------------------------------------------------------------
 N_SECTIONS      = 4           # target number of analysis sections (3-4)
@@ -175,7 +177,9 @@ ACTIVITY_SMOOTH_SEC = 1.0     # extra smoothing before looking for change points
 MODEL_ID        = "stabilityai/sd-turbo"
 IMAGE_SIZE      = 512         # SD-Turbo's native resolution
 GEN_STEPS       = 2           # SD-Turbo is designed for 1-4 steps
-RANDOM_SEED     = 42          # section N uses seed RANDOM_SEED + N (shared prompt structure keeps them related)
+RANDOM_SEED     = 42          # fixed seed for the particle field; image seeds come from the song (section 9.2)
+IMG2IMG_STRENGTH = 0.6        # sections 2+ start from the previous section's image (0 = copy, 1 = ignore it)
+IMG2IMG_STEPS    = 4          # img2img runs int(steps x strength) = 2 denoising steps
 FORCE_REGENERATE = False      # True = ignore cached images and generate again
 
 # ---- Video ----------------------------------------------------------------------------
@@ -740,8 +744,12 @@ md(r"""
 
 **[CLAP](https://huggingface.co/laion/clap-htsat-unfused)** (Contrastive Language-Audio Pretraining) is a pretrained model that embeds audio
 and text in the same space, so it can score how well the clip matches each text label without any training (**zero-shot**).
-The clip is cut into 10-second windows (CLAP's training length), each window is scored against five vibe descriptions, and the
-probabilities are averaged. The winning vibe sets the **theme and palette** shared by every section prompt.
+The clip is cut into 10-second windows (CLAP's training length), each window is scored against two groups of descriptions, and the
+probabilities are averaged per group:
+
+* **Vibe** (party / calm / dark / dreamy / epic) → sets the **theme and palette** shared by every section prompt.
+* **Instruments / textures** (electric guitar, piano, synthesizer, strings, …) → used in section 9.2 to pick the **materials** the
+  shapes are made of.
 
 This is a genre-level guess, not a validated mood classifier. If CLAP cannot be loaded, a simple rule based on tempo, onset rate and
 brightness is used instead. Set `VIBE_OVERRIDE` in the config to force a vibe.
@@ -755,8 +763,18 @@ VIBES = {   # vibe -> text description CLAP compares the audio against
     "dreamy": "dreamy emotional melancholic music",
     "epic":   "epic cinematic orchestral music",
 }
+INSTRUMENTS = {   # instrument / texture tag -> text description
+    "electric guitar": "distorted electric guitar",
+    "piano":           "piano",
+    "synthesizer":     "electronic synthesizer",
+    "strings":         "orchestral string instruments",
+    "acoustic guitar": "acoustic guitar",
+    "drums":           "heavy drums and percussion",
+    "voice":           "singing voice",
+}
 
-def vibe_scores_clap(y):
+def clap_scores(y, groups):
+    # Zero-shot CLAP: softmax within each group of labels, averaged over 10 s windows.
     from transformers import ClapModel, ClapProcessor
     model = ClapModel.from_pretrained(CLAP_MODEL).eval()
     processor = ClapProcessor.from_pretrained(CLAP_MODEL)
@@ -764,41 +782,116 @@ def vibe_scores_clap(y):
     y48 = librosa.resample(y, orig_sr=SR, target_sr=clap_sr)
     win = 10 * clap_sr
     windows = [y48[i:i + win] for i in range(0, max(1, len(y48) - win + 1), win)]
-    inputs = processor(text=list(VIBES.values()), audio=windows, sampling_rate=clap_sr, return_tensors="pt", padding=True)
+    texts = [t for g in groups.values() for t in g.values()]
+    inputs = processor(text=texts, audio=windows, sampling_rate=clap_sr, return_tensors="pt", padding=True)
     with torch.no_grad():
-        probs = model(**inputs).logits_per_audio.softmax(dim=-1).mean(dim=0).numpy()   # average over windows
-    return dict(zip(VIBES, probs))
+        logits = model(**inputs).logits_per_audio                     # windows x texts
+    out, i = {}, 0
+    for name, g in groups.items():
+        probs = logits[:, i:i + len(g)].softmax(dim=-1).mean(dim=0).numpy()
+        out[name], i = dict(zip(g, probs)), i + len(g)
+    return out
 
-def vibe_scores_rules():
-    # Fallback: fast + busy -> party, sparse + dark -> calm, otherwise dreamy.
+def scores_rules():
+    # Fallback without CLAP: vibe from tempo / onset rate / brightness, instruments from the stems.
     onset_rate = len(onset_times) / DURATION
-    if tempo >= 110 and onset_rate >= 3:
-        pick = "party"
-    elif onset_rate < 1.5 and centroid.mean() < 1500:
-        pick = "calm"
-    else:
-        pick = "dreamy"
-    return {v: float(v == pick) for v in VIBES}
+    pick = ("party" if tempo >= 110 and onset_rate >= 3 else
+            "calm" if onset_rate < 1.5 and centroid.mean() < 1500 else "dreamy")
+    stem_tag = {"drums": "drums", "other": "synthesizer", "vocals": "voice", "bass": "electric guitar"}
+    inst = {k: 0.0 for k in INSTRUMENTS}
+    for stem, tag in stem_tag.items():
+        if stem_present[stem]:
+            inst[tag] += float(np.mean(stem_rms[stem]))
+    total = sum(inst.values()) or 1.0
+    return {"vibe": {v: float(v == pick) for v in VIBES}, "instruments": {k: v / total for k, v in inst.items()}}
 
 try:
-    vibe_scores = vibe_scores_clap(y)
+    scores = clap_scores(y, {"vibe": VIBES, "instruments": INSTRUMENTS})
     VIBE_METHOD = f"CLAP zero-shot ({CLAP_MODEL})"
 except Exception as e:
-    print(f"CLAP unavailable ({type(e).__name__}: {e}); using rule-based vibe")
-    vibe_scores, VIBE_METHOD = vibe_scores_rules(), "rule-based fallback"
+    print(f"CLAP unavailable ({type(e).__name__}: {e}); using rule-based fallback")
+    scores, VIBE_METHOD = scores_rules(), "rule-based fallback"
+vibe_scores, instrument_scores = scores["vibe"], scores["instruments"]
 
 VIBE = VIBE_OVERRIDE or max(vibe_scores, key=vibe_scores.get)
 print(f"Vibe: {VIBE}  ({VIBE_METHOD}{', overridden' if VIBE_OVERRIDE else ''})")
 
-fig, ax = plt.subplots(figsize=(7, 2.6))
-names = list(vibe_scores)
-ax.barh(names, [vibe_scores[n] for n in names],
-        color=[COLORS["rms"] if n == VIBE else "#c3c2b7" for n in names], height=0.6)
-for k, n in enumerate(names):
-    ax.text(vibe_scores[n] + 0.01, k, f"{vibe_scores[n]:.0%}", va="center", fontsize=9)
-ax.set(xlim=(0, 1.1), xlabel="probability", title="Vibe scores (CLAP, averaged over 10 s windows)")
-ax.invert_yaxis(); ax.grid(axis="y", visible=False)
+fig, axes = plt.subplots(1, 2, figsize=(12, 3.0))
+top_instruments = sorted(instrument_scores, key=instrument_scores.get, reverse=True)[:2]
+for ax, sc, chosen, title in [(axes[0], vibe_scores, [VIBE], "Vibe"),
+                              (axes[1], instrument_scores, top_instruments, "Instruments / textures")]:
+    names = list(sc)
+    ax.barh(names, [sc[n] for n in names], color=[COLORS["rms"] if n in chosen else "#c3c2b7" for n in names], height=0.6)
+    for k, n in enumerate(names):
+        ax.text(sc[n] + 0.01, k, f"{sc[n]:.0%}", va="center", fontsize=9)
+    ax.set(xlim=(0, 1.1), xlabel="probability", title=f"{title} (CLAP, averaged over 10 s windows)")
+    ax.invert_yaxis(); ax.grid(axis="y", visible=False)
 plt.tight_layout(); plt.savefig(FIG_DIR / "vibe.png"); plt.show()
+""")
+
+# =============================================================================
+# 9.2 Song signature
+# =============================================================================
+md(r"""
+## 9.2 Song signature: shapes, materials and seed
+
+So that different songs produce **different shapes**, not just different colours, three song-level properties feed every prompt:
+
+| Property | Measured from | Becomes | Rule |
+|---|---|---|---|
+| **Number of star points** | tempo | `N-pointed star` | < 80 BPM → 5, < 100 → 6, < 120 → 8, < 140 → 10, else 12 |
+| **Form** | key mode (Krumhansl–Schmuckler key estimate on chroma, drums removed) | major → *rounded petal shapes*, minor → *sharp angular shards* | |
+| **Layout** | drum share of the stem energy ("rhythmic drive") | ≥ `DRIVE_THRESHOLD` → *concentric tunnel rings*, else *swirling spiral arms* | |
+| **Materials** | top 2 CLAP instrument / texture tags (section 9.1) | e.g. distorted guitar → *jagged shattered glass*, piano → *smooth ivory curves* | table below |
+| **Image seed** | fingerprint (SHA-256) of the clip's audio samples | `SONG_SEED + section` | same song → same images; different song → different compositions |
+
+Every option stays a **centred radial composition** (a star inside a star), so the part-by-part animation in section 13 still works.
+These mappings are design choices (cross-modal metaphors), not perceptual facts.
+""")
+
+code(r"""
+# 1. Seed from the song itself: a fingerprint of the audio samples
+SONG_SEED = int(hashlib.sha256(np.round(y, 4).tobytes()).hexdigest()[:8], 16) % 1_000_000
+
+# 2a. Key and mode: correlate the mean chroma (drums removed) with rotated Krumhansl-Schmuckler profiles
+PITCHES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+KS_MAJOR = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
+KS_MINOR = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
+chroma_mean = librosa.feature.chroma_cqt(y=y - stems["drums"], sr=SR, hop_length=HOP_LENGTH).mean(axis=1)
+key_corr, key_idx, MODE = max((np.corrcoef(chroma_mean, np.roll(profile, k))[0, 1], k, mode)
+                              for mode, profile in (("major", KS_MAJOR), ("minor", KS_MINOR)) for k in range(12))
+KEY = f"{PITCHES[key_idx]} {MODE}"
+
+# 2b. Shape family
+N_POINTS = next(n for limit, n in [(80, 5), (100, 6), (120, 8), (140, 10), (np.inf, 12)] if tempo < limit)
+FORM = "rounded petal shapes" if MODE == "major" else "sharp angular shards"
+stem_means = {n: float(np.mean(stem_rms[n])) for n in STEM_NAMES if stem_present[n]}
+DRUM_SHARE = stem_means.get("drums", 0.0) / (sum(stem_means.values()) or 1.0)
+LAYOUT = "concentric tunnel rings" if DRUM_SHARE >= DRIVE_THRESHOLD else "swirling spiral arms"
+
+# 3. Materials from the two strongest instrument / texture tags
+MATERIALS = {
+    "electric guitar": "jagged shattered glass",
+    "piano":           "smooth ivory curves",
+    "synthesizer":     "glowing circuit traces",
+    "strings":         "flowing silk ribbons",
+    "acoustic guitar": "carved wood grain",
+    "drums":           "hammered metal plates",
+    "voice":           "soft smoke wisps",
+}
+MATERIAL_TEXT = " and ".join(MATERIALS[t] for t in top_instruments)
+
+SHAPE_TEXT = f"{N_POINTS}-pointed star inside a larger star, {LAYOUT}, {FORM}"
+signature = pd.DataFrame([
+    ("tempo", f"{tempo:.1f} BPM", f"{N_POINTS}-pointed star"),
+    ("key / mode", f"{KEY} (r = {key_corr:.2f})", FORM),
+    ("drum share of stems", f"{DRUM_SHARE:.0%}", LAYOUT),
+    ("top instruments (CLAP)", ", ".join(top_instruments), MATERIAL_TEXT),
+    ("vibe", VIBE, "theme / palette (section 10)"),
+    ("audio fingerprint", f"seed {SONG_SEED}", f"section seeds {SONG_SEED + 1}..{SONG_SEED + n_sections}"),
+], columns=["property", "measured", "visual result"])
+signature.to_csv(OUTPUT_DIR / "song_signature.csv", index=False)
+signature
 """)
 
 # =============================================================================
@@ -813,11 +906,13 @@ The diffusion model never sees the waveform. Instead each section goes through a
 
 Every prompt has three parts:
 
-1. **Fixed structure** (same for all sections): *a glowing star inside a larger star with radiating light lines, centred on a dark
-   background*. This is deliberate: the renderer (section 13) animates the image **part by part by radius** (core, inner star,
-   outer star), so the images need a centred, layered radial structure.
+1. **Song structure** (same for all sections of a song, from section 9.2): a centred *N-pointed star inside a larger star* with the
+   song's layout, form and materials. A centred, layered radial structure is required because the renderer (section 13) animates the
+   image **part by part by radius** (core, inner star, outer star).
 2. **Vibe theme** (same for all sections, from section 9.1): colours and lighting, e.g. *neon club lights* for party.
-3. **Section descriptors** (different per section): one short phrase per measured feature.
+3. **Section descriptors** (different per section): one short phrase each for energy, bass, mid and high-frequency content.
+   Spectral brightness and onset density are still measured and shown in `section_description`, but left out of the prompt to stay
+   under the token limit (the song-level shape words carry more information).
 
 **Levels** (documented design thresholds): `0.00–0.33 → low`, `0.33–0.67 → medium`, `0.67–1.00 → high`.
 
@@ -834,9 +929,8 @@ code(r"""
 def level(x):
     return "low" if x < 1 / 3 else ("medium" if x < 2 / 3 else "high")
 
-# 1. Fixed structure shared by every section (the renderer animates these parts)
-STRUCTURE = ("luminous digital art, centered radial mandala, glowing star inside a larger star, "
-             "radiating light lines, dark background")
+# 1. Song structure shared by every section (the renderer animates these parts)
+STRUCTURE = f"luminous digital art, centered radial composition, {SHAPE_TEXT}, made of {MATERIAL_TEXT}, dark background"
 
 # 2. Vibe theme shared by every section
 VIBE_THEMES = {
@@ -850,17 +944,18 @@ VIBE_THEMES = {
 # 3. One short descriptor per feature and level
 DESCRIPTORS = {
     "rms":      {"low": "sparse dim calm", "medium": "layered moderately bright", "high": "dense intense glow"},
-    "bass":     {"low": "small central core", "medium": "round central core", "high": "huge glowing core, thick rings"},
-    "mid":      {"low": "simple star shape", "medium": "layered star points", "high": "many layered star points, ribbons"},
-    "high":     {"low": "smooth surfaces", "medium": "some fine lines", "high": "fine particles, thin sparkling lines"},
+    "bass":     {"low": "small central core", "medium": "round central core", "high": "huge glowing core"},
+    "mid":      {"low": "simple layers", "medium": "layered points", "high": "many layered points"},
+    "high":     {"low": "smooth surfaces", "medium": "some fine lines", "high": "fine sparkling particles"},
     "centroid": {"low": "soft rounded edges", "medium": "balanced edges", "high": "crisp sharp edges"},
     "onset_density_rel": {"low": "few elements", "medium": "several accents", "high": "fragmented bursts"},
 }
-FEATURES_FOR_PROMPT = ["rms", "bass", "mid", "high", "centroid", "onset_density_rel"]
+LEVEL_FEATURES = ["rms", "bass", "mid", "high", "centroid", "onset_density_rel"]   # all measured + described
+PROMPT_FEATURES = ["rms", "bass", "mid", "high"]                                  # the ones sent to the model
 
 def build_prompt(row):
-    levels = {f: level(row[f]) for f in FEATURES_FOR_PROMPT}
-    phrases = [DESCRIPTORS[f][levels[f]] for f in FEATURES_FOR_PROMPT]
+    levels = {f: level(row[f]) for f in LEVEL_FEATURES}
+    phrases = [DESCRIPTORS[f][levels[f]] for f in PROMPT_FEATURES]
     prompt = ", ".join([STRUCTURE, VIBE_THEMES[VIBE]] + phrases)
     description = (f"A {VIBE} song. This section has {levels['rms']} energy with {levels['bass']} low-frequency presence, "
                    f"{levels['mid']} mid-frequency activity, {levels['high']} high-frequency detail, "
@@ -871,9 +966,14 @@ records = []
 for _, row in sections.iterrows():
     prompt, description, levels = build_prompt(row)
     s = int(row.section)
+    first = s == 1
     records.append({"section": s, "vibe": VIBE, **{f"{k}_level": v for k, v in levels.items()},
                     "section_description": description, "prompt": prompt,
-                    "seed": RANDOM_SEED + s, "model": MODEL_ID, "steps": GEN_STEPS, "guidance_scale": 0.0,
+                    "seed": SONG_SEED + s, "model": MODEL_ID, "guidance_scale": 0.0,
+                    "mode": "text2img" if first else "img2img",
+                    "init_image": "" if first else str(IMAGE_DIR / f"section_{s - 1}.png"),
+                    "strength": 1.0 if first else IMG2IMG_STRENGTH,
+                    "steps": GEN_STEPS if first else IMG2IMG_STEPS,
                     "size": f"{IMAGE_SIZE}x{IMAGE_SIZE}", "image_path": str(IMAGE_DIR / f"section_{s}.png")})
 prompts = pd.DataFrame(records)
 
@@ -905,11 +1005,16 @@ Model: **[SD-Turbo](https://huggingface.co/stabilityai/sd-turbo)** (distilled fr
 It is light enough for a free Colab T4 or an Apple-silicon laptop. Before publishing results, check the model card's license terms
 (SD-Turbo is released under the Stability AI community license).
 
-**Caching:** each image is saved to `outputs/images/section_N.png` together with `outputs/prompts.csv`. On later runs an image is only
-regenerated if its prompt or settings changed (or `FORCE_REGENERATE = True`), so the notebook can be re-run without the GPU.
+**Image-to-image chaining:** Section 1 is generated from text alone. Each later section starts from the **previous section's image**
+(img2img, `strength = IMG2IMG_STRENGTH` = 0.6) with its own prompt, so the song's images read as one evolving artwork: the composition
+carries over while energy, bass and detail change with the music.
 
-**Consistency vs. variety:** every prompt shares the same structure and vibe theme, which keeps the images related. Each section uses
-its own seed (`RANDOM_SEED + section`), so sections with similar statistics still get visibly different artwork.
+**Caching:** each image is saved to `outputs/images/section_N.png` together with `outputs/prompts.csv`. On later runs an image is only
+regenerated if its prompt or settings changed (or `FORCE_REGENERATE = True`). Because of the chaining, regenerating one section also
+regenerates every section after it.
+
+**Seeds:** section N uses `SONG_SEED + N`, where `SONG_SEED` is a fingerprint of the clip (section 9.2): re-running a song reproduces
+its images, while a different song starts from different noise.
 
 If diffusion is unavailable (no `diffusers` / download fails), a clearly labelled **placeholder gradient** is used so the rest of the
 pipeline still runs. Placeholders are *not* valid project results.
@@ -917,7 +1022,7 @@ pipeline still runs. Placeholders are *not* valid project results.
 
 code(r"""
 PROMPTS_CSV = OUTPUT_DIR / "prompts.csv"
-GEN_KEYS = ["prompt", "seed", "model", "steps", "size"]
+GEN_KEYS = ["prompt", "seed", "model", "steps", "size", "mode", "init_image", "strength"]
 
 def needs_generation(r, previous):
     # True if the image is missing or was generated with different prompt/settings.
@@ -935,8 +1040,10 @@ def placeholder_image(section, size=IMAGE_SIZE):
     img = np.clip((1 - r)[..., None] * base, 0, 1)
     return Image.fromarray((img * 255).astype(np.uint8))
 
-previous = pd.read_csv(PROMPTS_CSV) if PROMPTS_CSV.exists() else None
-todo = [r for _, r in prompts.iterrows() if needs_generation(r, previous)]
+previous = pd.read_csv(PROMPTS_CSV, keep_default_na=False) if PROMPTS_CSV.exists() else None
+stale = [int(r.section) for _, r in prompts.iterrows() if needs_generation(r, previous)]
+# Chaining: once a section changes, every later section (which starts from it) must be regenerated too
+todo = [r for _, r in prompts.iterrows() if stale and r.section >= min(stale)]
 print(f"{len(prompts) - len(todo)} cached image(s), {len(todo)} to generate")
 
 prompts["generated_by"] = "cache"
@@ -945,7 +1052,7 @@ if previous is not None and "generated_by" in previous:
 
 if todo:
     try:
-        from diffusers import AutoPipelineForText2Image
+        from diffusers import AutoPipelineForImage2Image, AutoPipelineForText2Image
         from diffusers.utils import logging as diffusers_logging
         from transformers.utils import logging as transformers_logging
         diffusers_logging.set_verbosity_error(); transformers_logging.set_verbosity_error()
@@ -953,14 +1060,21 @@ if todo:
         pipe = AutoPipelineForText2Image.from_pretrained(
             MODEL_ID, torch_dtype=dtype, variant="fp16" if dtype == torch.float16 else None).to(DEVICE)
         pipe.set_progress_bar_config(disable=True)
+        img2img = AutoPipelineForImage2Image.from_pipe(pipe)          # shares the same weights
+        img2img.set_progress_bar_config(disable=True)
         for r in todo:
             generator = torch.Generator("cpu").manual_seed(int(r.seed))
-            image = pipe(r.prompt, num_inference_steps=int(r.steps), guidance_scale=0.0,
-                         width=IMAGE_SIZE, height=IMAGE_SIZE, generator=generator).images[0]
+            if r["mode"] == "text2img":   # (r.mode would be the pandas method)
+                image = pipe(r.prompt, num_inference_steps=int(r.steps), guidance_scale=0.0,
+                             width=IMAGE_SIZE, height=IMAGE_SIZE, generator=generator).images[0]
+            else:
+                init = Image.open(r.init_image).convert("RGB")
+                image = img2img(r.prompt, image=init, num_inference_steps=int(r.steps), strength=float(r.strength),
+                                guidance_scale=0.0, generator=generator).images[0]
             image.save(r.image_path)
             prompts.loc[prompts.section == r.section, "generated_by"] = MODEL_ID
-            print(f"  generated section {r.section}")
-        del pipe
+            print(f"  generated section {r.section} ({r['mode']})")
+        del pipe, img2img
     except Exception as e:
         print(f"Diffusion unavailable ({type(e).__name__}: {e}).\nUsing PLACEHOLDER images - not valid results.")
         for r in todo:
@@ -974,7 +1088,8 @@ section_images = [np.asarray(Image.open(p).convert("RGB").resize((OUTPUT_SIZE, O
 fig, axes = plt.subplots(1, n_sections, figsize=(4 * n_sections, 4.4))
 for ax, img, (_, r) in zip(axes, section_images, prompts.iterrows()):
     ax.imshow(img); ax.axis("off")
-    ax.set_title(f"Section {r.section}\nenergy {r.rms_level} · bass {r.bass_level} · high {r.high_level}", fontsize=10)
+    ax.set_title(f"Section {r.section} ({r['mode']})\nenergy {r.rms_level} · bass {r.bass_level} · high {r.high_level}",
+                 fontsize=10)
 plt.tight_layout(); plt.savefig(FIG_DIR / "section_images.png"); plt.show()
 """)
 
@@ -1520,7 +1635,7 @@ b = metrics[(metrics.version == "baseline")].set_index("feature")
 print(f"Audio source: {AUDIO_SOURCE} | {DURATION:.1f} s | tempo estimate {tempo:.1f} BPM")
 print(f"Sections: {n_sections} ({SECTION_METHOD}) at {np.round(section_edges[1:-1], 2).tolist()} s")
 print(f"Stems: {STEM_METHOD} | present: {[n for n in STEM_NAMES if stem_present[n]]} | drum hits: {len(drum_times)}")
-print(f"Vibe: {VIBE} ({VIBE_METHOD})")
+print(f"Vibe: {VIBE} ({VIBE_METHOD}) | shape: {SHAPE_TEXT} | materials: {MATERIAL_TEXT}")
 print(f"Images: {prompts.generated_by.unique().tolist()} | seeds {prompts.seed.tolist()} | {GEN_STEPS} steps\n")
 print("Motion energy vs audio (rendered frames, crossfades excluded):")
 for f in ["rms", "onset"]:
@@ -1552,7 +1667,10 @@ synchronization is answered by the survey (section 17), not by these numbers.
 * **Wavelength-inspired mapping:** large forms for bass and fine detail for highs is a cross-modal design metaphor; the visuals do not
   physically represent acoustic wavelength.
 * **Stems are estimates.** Demucs separation leaks between stems, and "other" mixes every remaining instrument.
-* **The vibe is a coarse zero-shot guess** from five hand-written labels, not a validated mood classifier.
+* **The vibe and instrument tags are coarse zero-shot guesses** from hand-written labels, not validated classifiers; close scores
+  (e.g. 31% vs 30%) mean the choice is nearly arbitrary, which is why `VIBE_OVERRIDE` exists.
+* **Shape rules are design metaphors** (tempo → number of points, minor key → shards); the key estimate can be wrong for songs with
+  modulations or ambiguous harmony.
 * **Parts are found by radius**, which works because the prompts ask for a centred radial composition; arbitrary scenes
   (e.g. a crowd) would need a segmentation model, and people are not animated.
 * **Prompt following is limited.** SD-Turbo is a small, few-step model; images reflect the descriptors only loosely, and the 77-token
@@ -1564,7 +1682,6 @@ synchronization is answered by the survey (section 17), not by these numbers.
 ## 20. Future work
 
 * Run the identical notebook on one or two **real songs** (set `AUDIO_PATH`) to check that the pipeline is not clip-specific.
-* Use **image-to-image** generation from Section 1's image to make later section images even more coherent.
 * Replace radial parts with **segmentation masks** (e.g. Segment Anything) to animate arbitrary objects such as lights or silhouettes
   in a themed scene.
 * Try a stronger model (SDXL-Turbo) if GPU memory allows, and compare prompt adherence.
