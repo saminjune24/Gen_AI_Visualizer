@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+# Large/licensed media are not committed
+*.mp4
+*.wav
+*.mp3
+*.flac
+outputs/frames/

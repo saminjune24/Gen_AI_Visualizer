@@ -1,0 +1,77 @@
+# Section-Aware Procedural GenAI Audio Visualizer
+
+A single Jupyter Notebook ([`genai_audio_visualizer.ipynb`](genai_audio_visualizer.ipynb)) that turns a short music clip into an
+audio-reactive video. It combines **generative AI** (SD-Turbo creates one abstract image per song section, prompted from that
+section's measured audio features) with **procedural animation** (beats, bass/mid/high energy, RMS, onsets and spectral brightness
+drive zoom, rings, rotation, particles, brightness and crossfades). It compares the result against a **non-audio-conditioned
+baseline** that uses the same images and effects.
+
+**Research question:** can audio-derived features guide generative artwork and procedural animation to produce a visualization that
+feels more synchronized and connected to the music than a non-audio-conditioned visualizer?
+
+## Pipeline
+
+```
+audio -> features -> sections -> prompts -> SD-Turbo images -> frame-level control timeline
+      -> animation (audio-conditioned)  -> MP4 + audio
+      -> animation (preset baseline)     -> MP4 + audio
+      -> technical alignment checks + survey design
+```
+
+| Notebook section | What happens |
+|---|---|
+| 3. Configuration | every tunable parameter in one cell |
+| 4. Load audio | file or a synthesized 30 s, 4-part demo track |
+| 5–7. Features | onset strength, beats, RMS, spectral centroid, low/mid/high band energy, then smoothing, robust normalization and a 24 fps control timeline |
+| 8–9. Sections | change-point detection on an activity curve (equal-window fallback) plus a per-section summary |
+| 10–11. GenAI | feature-driven prompts and SD-Turbo generation, with images cached in `outputs/images/` |
+| 12–14. Render | OpenCV renderer with 7 layers, then FFmpeg muxes in the original audio |
+| 15. Baseline | same images/effects, preset fixed-rate controls that never read the audio |
+| 16. Checks | motion energy from rendered frames, correlations, cross-correlation lag, QA |
+| 17. Survey | counterbalanced A/B design, response template and analysis helper |
+
+## Run locally (macOS / Linux)
+
+```bash
+python3.13 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/jupyter lab genai_audio_visualizer.ipynb        # or open it in VS Code with the .venv kernel
+# headless:
+.venv/bin/jupyter nbconvert --to notebook --execute --inplace genai_audio_visualizer.ipynb
+```
+
+* Image generation uses CUDA if available, Apple-silicon MPS otherwise, then CPU. The first run downloads SD-Turbo (~2.5 GB).
+* The section images are committed, so re-running the notebook **does not regenerate them** unless the prompts change or
+  `FORCE_REGENERATE = True`.
+* A full run takes about 1.5 minutes on an Apple-silicon laptop when images are cached.
+* To use your own song, set `AUDIO_PATH` (and optionally `CLIP_START`) in the configuration cell. Audio and video files are
+  git-ignored.
+
+## Run on Google Colab
+
+Upload the notebook, choose **Runtime → Change runtime type → T4 GPU**, and Run all. The first code cell installs the missing packages.
+
+## Outputs (`outputs/`)
+
+| File | Committed | Content |
+|---|---|---|
+| `images/section_N.png` | yes | generated section images |
+| `prompts.csv` | yes | prompt, seed, model, steps and size for every image (reproducibility) |
+| `sections.csv` | yes | section boundaries and feature summary |
+| `metrics.csv` | yes | correlations and lag for both videos |
+| `figures/*.png` | yes | diagnostic plots |
+| `survey_template.csv` | yes | empty survey response sheet |
+| `visualizer_audio.mp4`, `baseline_audio.mp4` | no | final videos with audio (regenerate by running the notebook) |
+
+## Notes on wording
+
+Spectral centroid is a *brightness* proxy, not pitch. RMS is an *energy* proxy, not perceived loudness. Sections are *analysis
+sections*, not verses or choruses. The "large forms for bass, fine detail for highs" mapping is a wavelength-*inspired* design choice.
+The technical metrics check the implementation; the survey measures perception.
+
+## References
+
+* LibROSA: https://librosa.org/doc/latest/index.html
+* SD-Turbo model card: https://huggingface.co/stabilityai/sd-turbo
+* Diffusers text-to-image: https://huggingface.co/docs/diffusers/main/en/api/pipelines/stable_diffusion/text2img
+* Inspiration: https://github.com/actionoise/python-audio-reactive-visualizer, https://github.com/deforum/deforum-stable-diffusion
