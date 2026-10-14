@@ -137,6 +137,10 @@ AUDIO_PATH    = os.environ.get("AUDIO_PATH") or None
 CLIP_START    = float(os.environ.get("CLIP_START", 0.0))   # seconds into the file where the clip starts
 CLIP_DURATION = 30.0                                       # seconds
 
+# Visual style: "psychedelic" = endless kaleidoscope zoom, morph transitions, colour cycling (section 13)
+#               "modes"       = a different motion mode per shape family (spin, sway, shatter, flow, ...)
+VISUAL_STYLE  = os.environ.get("VISUAL_STYLE", "psychedelic")
+
 # Each song gets its own output folder (the demo track writes to outputs/ directly).
 def slugify(text):
     ascii_text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
@@ -182,7 +186,7 @@ ACTIVITY_SMOOTH_SEC = 1.0     # extra smoothing before looking for change points
 DRAMATIC_WINDOW_SEC = 3.0     # compare this many seconds before vs after each section boundary
 DRAMATIC_WEIGHTS    = {"drums": 1.0, "drum_hits": 1.0, "bass": 1.0, "tempo": 0.5}   # tempo is noisy -> half weight
 DRAMATIC_THRESHOLD  = 0.50    # largest weighted change at or above this -> completely new image and shape
-DRAMATIC_CROSSFADE  = 0.25    # seconds: near-cut instead of the normal CROSSFADE_SECONDS blend
+DRAMATIC_CROSSFADE  = 0.6 if VISUAL_STYLE == "psychedelic" else 0.25   # seconds: fast morph / near-cut
 DRAMATIC_FLASH      = 0.35    # extra white flash at a dramatic change (audio-conditioned version only)
 
 # ---- Image generation ---------------------------------------------------------------
@@ -197,7 +201,7 @@ FORCE_REGENERATE = False      # True = ignore cached images and generate again
 # ---- Video ----------------------------------------------------------------------------
 FPS               = 24
 OUTPUT_SIZE       = 512       # square video, pixels
-CROSSFADE_SECONDS = 1.0       # length of the blend between section images
+CROSSFADE_SECONDS = 1.5 if VISUAL_STYLE == "psychedelic" else 1.0   # length of a normal transition (s)
 PREVIEW_SECONDS   = 8.0       # length of the quick preview render
 
 # ---- Visual mapping coefficients (section 12) ------------------------------------------
@@ -226,6 +230,13 @@ VIS = {
     "shock_speed": 1.6, "shock_amp": 0.06, "shock_width": 0.07,          # shockwave: ring wave from each beat
     "shatter_tiles": 6, "shatter_amp": 0.07,               # shatter: tiles jump apart on drum hits
     "flow_amp_base": 0.010, "flow_amp_lead": 0.030, "flow_speed_base": 0.3, "flow_speed_lead": 1.2,  # flow: liquid
+    # Psychedelic style (section 13)
+    "zoom_speed_base": 0.08, "zoom_speed_rms": 0.25, "zoom_speed_beat": 0.9,  # endless zoom, octaves per second
+    "kaleido_rot_base": 4.0, "kaleido_rot_mid": 25.0,      # wedge rotation, deg/s
+    "hue_speed_base": 0.02, "hue_speed_rms": 0.10, "hue_jump_drum": 0.03,     # colour cycling, turns/s and per hit
+    "morph_swirl": 2.5,                                    # radians of swirl at the middle of a morph
+    "beat_saturation": 0.35,                               # extra saturation on each beat
+    "psy_saturation": 1.45, "psy_contrast": 1.30,          # vivid neon look (psychedelic style only)
 }
 
 # ---- Baseline (section 15): fixed rules that never read the audio ------------------------
@@ -1193,7 +1204,8 @@ def structure(section):
     # Shape family for this section (section 9.3) + the song's form and materials (section 9.2)
     shape = SHAPE_FAMILIES[plan[section]["family"]]
     layout = "full-frame composition" if plan[section]["family"] == "waves" else "centered radial composition"
-    return f"luminous digital art, {layout}, {shape}, {FORM}, made of {MATERIAL_TEXT}, dark background"
+    art = "psychedelic kaleidoscope art" if VISUAL_STYLE == "psychedelic" else "luminous digital art"
+    return f"{art}, {layout}, {shape}, {FORM}, made of {MATERIAL_TEXT}, dark background"
 
 # 2. Vibe theme shared by every section
 VIBE_THEMES = {
@@ -1444,7 +1456,18 @@ details follow high frequencies (the wavelength-inspired grammar from section 10
 | White flash | onsets | brief flash | `flash = 0.12·onset_pulse` |
 | Section image | section id, dramatic beat change | crossfade / cut | 1 s crossfade; **0.25 s cut + flash** at a dramatic beat change |
 
-### Motion modes: every shape family moves differently
+### Psychedelic style (default, `VISUAL_STYLE = "psychedelic"`)
+
+| Effect | What happens | Driven by |
+|---|---|---|
+| **Endless zoom** | the view keeps zooming into the image forever; two zoom levels one octave apart are blended so the loop never jumps, and the radius is mirrored so the pattern repeats in concentric rings | speed = 0.08 + 0.25·RMS + **0.9·beat pulse** octaves/s (lunges forward on every beat) |
+| **Always kaleidoscope** | the image is folded into N mirrored wedges (N = the song's star points) | wedge rotation: mid band; pattern slides through the wedges: other stem |
+| **Morph transitions** | the next image *melts in*, its brightest parts first, while a swirl twists both images (peak at the middle of the transition) | 1.5 s normally, 0.6 s + flash at a dramatic beat change |
+| **Colour cycling** | the whole frame rotates through the rainbow; saturation pops on every beat | hue speed: RMS; hue jump on every drum hit |
+
+Line art, light spots, particles, brightness, sharpness and flashes work as in the table above.
+
+### Motion modes (`VISUAL_STYLE = "modes"`): every shape family moves differently
 
 Spinning rings are only one of seven motion styles. Each section's image moves according to its shape family (section 9.3), and the
 same audio controls drive each style in its own way:
@@ -1521,6 +1544,12 @@ def visual_params(ctrl, edges, crossfades=CROSSFADE_SECONDS, flash_times=()):
     p["tile_seed"] = ctrl.drum_hits.values.astype(int)
     p["flow_amp"] = v["flow_amp_base"] + v["flow_amp_lead"] * lead + 0.01 * ctrl.rms.values
     p["flow_phase"] = 2 * np.pi * np.cumsum(v["flow_speed_base"] + v["flow_speed_lead"] * lead) / FPS
+    # Psychedelic style: endless-zoom phase (octaves), kaleidoscope rotation, colour-cycling hue
+    p["zoom_phase"] = np.cumsum(v["zoom_speed_base"] + v["zoom_speed_rms"] * ctrl.rms.values
+                                + v["zoom_speed_beat"] * ctrl.beat_pulse.values) / FPS
+    p["kaleido_angle"] = deg_per_frame(v["kaleido_rot_base"] + v["kaleido_rot_mid"] * ctrl.mid.values)
+    p["hue_shift"] = (np.cumsum(v["hue_speed_base"] + v["hue_speed_rms"] * ctrl.rms.values) / FPS
+                      + v["hue_jump_drum"] * ctrl.drum_hits.values) % 1.0
     p["flash"] = v["flash_onset"] * ctrl.onset_pulse.values
     for ft in flash_times:                                           # extra flash at dramatic beat changes
         p["flash"] += DRAMATIC_FLASH * np.where(t >= ft, np.exp(-PULSE_DECAY * (t - ft)), 0.0)
@@ -1536,7 +1565,9 @@ audio_params.describe().T[["mean", "min", "max"]].round(3)
 md(r"""
 ## 13. Render the audio-conditioned visualizer
 
-For every frame the renderer reads **one row of the parameter table** (looked up by frame timestamp) and:
+For every frame the renderer reads **one row of the parameter table** (looked up by frame timestamp). In the default **psychedelic**
+style, step 1 is the endless kaleidoscope zoom with morph transitions and a final colour-cycling hue rotation (section 12); in the
+**modes** style it is one motion mode per shape family. The steps:
 
 1. **Builds a warp map for each displayed image's motion mode** (section 12): kaleidoscope fold, zoom, shockwave, shatter, spin
    (per-part rotation by radius with twist and ripple), sway, or liquid flow, plus the camera drift. One `cv2.remap` call per image
@@ -1626,44 +1657,103 @@ def warp_maps(p, mode, age, extra_scale=1.0):
 def warp(img, maps):
     return cv2.remap(img, maps[0], maps[1], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
 
-def render_frame(p, frame_idx, images):
-    a, b, t = int(p.img_a), int(p.img_b), p.blend
-    sections_shown = [(a, p.age_a, 1 - t)] + ([(b, p.age_b, t)] if t > 0 and b != a else [])
-    if len(sections_shown) == 1:
-        sections_shown = [(a, p.age_a, 1.0)]
+def hue_rotate(img, turns):
+    # Rotate colours around the grey axis (a hue shift that keeps brightness roughly constant).
+    c, s_ = np.cos(2 * np.pi * turns), np.sin(2 * np.pi * turns)
+    k, q = (1 - c) / 3, np.sqrt(1 / 3) * s_
+    M = np.array([[c + k, k - q, k + q], [k + q, c + k, k - q], [k - q, k + q, c + k]], np.float32)
+    return np.clip(img @ M.T, 0, 1)
 
-    # 1-2. Move each displayed image (and its line-art / light layers) with its own section's motion mode, then blend
+R_MIRROR = 0.95                                     # radius at which the endless zoom mirrors back inward
+
+def kaleido_zoom_maps(p, scale, swirl):
+    # Kaleidoscope fold + zoom by `scale` + radial mirroring (concentric repeats) + optional morph swirl.
+    wedge = 2 * np.pi / N_POINTS
+    folded = np.abs(np.mod(THETA - np.deg2rad(p.kaleido_angle), wedge) - wedge / 2)
+    r = RADIUS / scale + p.ripple_amp * np.sin(VIS["ripple_waves"] * 2 * np.pi * RADIUS - p.ripple_phase)
+    r = R_MIRROR - np.abs(np.mod(r, 2 * R_MIRROR) - R_MIRROR)         # triangle wave: mirror the radius
+    theta = folded + np.deg2rad(p.outer_angle) + swirl * np.exp(-2 * RADIUS)
+    mx, my = polar_maps(r, theta)
+    return (mx + p.drift_x * S).astype(np.float32), (my + p.drift_y * S).astype(np.float32)
+
+def layers_psychedelic(p):
+    # Endless zoom: blend the image at zoom 2^f and 2^(f-1) (f = fractional zoom phase) -> seamless loop.
+    a, b, t = int(p.img_a), int(p.img_b), p.blend
+    f = p.zoom_phase % 1.0
+    w_next = smoothstep(0.35, 0.65, f)          # one zoom level dominates; swap quickly mid-octave (less double exposure)
+    swirl = VIS["morph_swirl"] * np.sin(np.pi * t) if t > 0 else 0.0
+    shown = [a] + ([b] if t > 0 and b != a else [])
+    out = {}
+    for k in shown:
+        img = np.zeros((S, S, 3), np.float32)
+        lines = np.zeros((S, S), np.float32)
+        lights = np.zeros((S, S), np.float32)
+        for scale, weight in ((2 ** f, 1 - w_next), (2 ** (f - 1), w_next)):
+            maps = kaleido_zoom_maps(p, scale, swirl)
+            img += weight * warp(images_for_render[k], maps)
+            lines += weight * warp(layers[k]["lines"], maps)
+            lights += weight * warp(layers[k]["lights"], maps)
+        out[k] = (img, lines, lights)
+    if len(shown) == 1:
+        return out[a]
+    # Morph: the new image appears where it is brightest first (luminance-keyed dissolve)
+    img_b = out[b][0]
+    mask = smoothstep(0.0, 1.0, 1.8 * t - 0.4 + 0.8 * (img_b.mean(axis=2) - 0.5))
+    m3 = mask[..., None]
+    return tuple(out[a][n] * (1 - (m3 if n == 0 else mask)) + out[b][n] * (m3 if n == 0 else mask) for n in range(3))
+
+def layers_modes(p):
+    # One motion mode per section image (section 12); crossfade between the two current images.
+    a, b, t = int(p.img_a), int(p.img_b), p.blend
+    shown = [(a, p.age_a, 1 - t), (b, p.age_b, t)] if t > 0 and b != a else [(a, p.age_a, 1.0)]
     img = np.zeros((S, S, 3), np.float32)
     lines = np.zeros((S, S), np.float32)
     lights = np.zeros((S, S), np.float32)
-    for k, age, weight in sections_shown:
+    for k, age, weight in shown:
         mode = SECTION_MODES[k]
         maps = warp_maps(p, mode, age)
         stretch = warp_maps(p, mode, age, extra_scale=p.lines_stretch)   # lines + lights push outward on drum hits
-        img += weight * warp(images[k], maps)
+        img += weight * warp(images_for_render[k], maps)
         lines += weight * warp(layers[k]["lines"], stretch)
         lights += weight * warp(layers[k]["lights"], stretch)
+    return img, lines, lights
 
-    # 3. Sharpness (centroid), saturation and brightness (RMS)
+def render_frame(p, frame_idx, images):
+    global images_for_render
+    images_for_render = images
+    a, b, t = int(p.img_a), int(p.img_b), p.blend
+    psychedelic = VISUAL_STYLE == "psychedelic"
+
+    # 1-2. Move the image parts (style-specific), including the line-art and light-spot layers
+    img, lines, lights = layers_psychedelic(p) if psychedelic else layers_modes(p)
+
+    # 3. Sharpness (centroid), saturation (RMS, + beat pop in psychedelic style) and brightness (RMS)
     blur = cv2.GaussianBlur(img, (0, 0), 2.0)
     img = img + (p.sharpness - 1.0) * 2.0 * (img - blur)
     gray = img.mean(axis=2, keepdims=True)
-    img = np.clip((gray + p.saturation * (img - gray)) * p.brightness, 0, 1)
+    sat = p.saturation * (VIS["psy_saturation"] if psychedelic else 1.0) + \
+          (VIS["beat_saturation"] * p.beat_pulse if psychedelic else 0.0)
+    img = np.clip((gray + sat * (img - gray)) * p.brightness, 0, 1)
+    if psychedelic:                                              # contrast curve around mid-grey
+        img = np.clip(0.5 + VIS["psy_contrast"] * (img - 0.5), 0, 1)
 
     # 4. Light spots take on a colour that changes on every drum hit (they glow brighter on hits)
     g = np.clip(lights * p.lights_gain, 0, 1)[..., None]
     img = img * (1 - g) + g * hue_to_rgb(p.light_hue)
-    # 5. Glowing line art (screen blend), particles, onset flash
+    # 5. Glowing line art (screen blend), then colour cycling (psychedelic), particles, onset flash
     line_col = accent_color(images[a] if t < 0.5 else images[b])
     glow = lines + 0.8 * cv2.GaussianBlur(lines, (0, 0), 4.0)
-    overlay = np.clip(glow[..., None] * line_col * p.lines_gain, 0, 1).astype(np.float32)
+    img = 1 - (1 - img) * (1 - np.clip(glow[..., None] * line_col * p.lines_gain, 0, 1))
+    if psychedelic:
+        img = hue_rotate(img, p.hue_shift)
+    overlay = np.zeros((S, S, 3), np.float32)
     n = int(p.n_particles)
     jit = np.random.default_rng(frame_idx).normal(0, 1.5 * p.jitter, (n, 2))
-    if SECTION_MODES[a if t < 0.5 else b] in RADIAL_PARTICLES:     # burst outward from the centre
+    if psychedelic or SECTION_MODES[a if t < 0.5 else b] in RADIAL_PARTICLES:   # burst outward from the centre
         r = (PARTICLES["r0"][:n] + PARTICLES["speed"][:n] * p.time_sec) % 0.75 * S
         px = S / 2 + r * np.cos(PARTICLES["angle"][:n]) + jit[:, 0]
         py = S / 2 + r * np.sin(PARTICLES["angle"][:n]) + jit[:, 1]
-    else:                                                            # rise like sparks, swaying sideways
+    else:                                                                      # rise like sparks
         x0 = PARTICLES["angle"][:n] / (2 * np.pi) * S
         px = x0 + 0.02 * S * np.sin(p.time_sec * 1.5 + x0) + jit[:, 0]
         py = S - (PARTICLES["r0"][:n] * S + PARTICLES["speed"][:n] * 2 * S * p.time_sec) % S + jit[:, 1]
@@ -1999,7 +2089,7 @@ print(f"Sections: {n_sections} ({SECTION_METHOD}) at {np.round(section_edges[1:-
 print(f"Stems: {STEM_METHOD} | present: {[n for n in STEM_NAMES if stem_present[n]]} | drum hits: {len(drum_times)}")
 print(f"Vibe: {VIBE} ({VIBE_METHOD}) | key {KEY} | lyrics: {LYRICS_NOTE}")
 print(f"Shapes per section: {prompts.shape_family.tolist()} | dramatic beat changes at {DRAMATIC_BOUNDARIES.tolist()} s")
-print(f"Motion per section: {SECTION_MODES}")
+print(f"Visual style: {VISUAL_STYLE}" + ("" if VISUAL_STYLE == "psychedelic" else f" | motion per section: {SECTION_MODES}"))
 print(f"Materials: {MATERIAL_TEXT}")
 print(f"Images: {prompts.generated_by.unique().tolist()} | seeds {prompts.seed.tolist()} | {GEN_STEPS} steps\n")
 print("Motion energy vs audio (rendered frames, crossfades excluded):")

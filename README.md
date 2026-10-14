@@ -40,7 +40,7 @@ audio -> features -> sections -> prompts -> SD-Turbo images -> frame-level contr
 | 9.3 Beat changes | each section boundary scored by its largest change in drum level, drum-hit rate, bass or tempo; dramatic changes restart the image with a new shape family (tunnel / sunburst / crystal / vortex / flower / waves) and cut with a flash |
 | 10–11. GenAI | song structure + vibe + section prompts; section 1 text-to-image, later sections image-to-image from the previous one; cached in `outputs/images/` |
 | 11.1 Layers | each image split into core / inner star / outer star (radial masks), line art (edges) and light spots |
-| 12–14. Render | seven motion modes chosen by shape family (kaleidoscope, zoom, shockwave, shatter, spin, sway, liquid flow) plus camera drift, each driven by the audio controls; FFmpeg muxes in the original audio |
+| 12–14. Render | default **psychedelic** style: endless kaleidoscope zoom (lunges on beats), morph transitions (new image melts in, brightest parts first, with a swirl), colour cycling (speed from RMS, jumps on drum hits). Alternative `VISUAL_STYLE=modes`: seven motion modes chosen by shape family (kaleidoscope, zoom, shockwave, shatter, spin, sway, liquid flow) plus camera drift, each driven by the audio controls; FFmpeg muxes in the original audio |
 | 15. Baseline | same images/effects, preset fixed-rate controls that never read the audio |
 | 16. Checks | motion energy from rendered frames, correlations, cross-correlation lag, QA |
 | 17. Survey | counterbalanced A/B design, response template and analysis helper |
@@ -69,7 +69,7 @@ python3.13 -m venv .venv
       genai_audio_visualizer.ipynb --output-dir outputs/my_song --output notebook_run
   ```
 
-  Add `VIBE_OVERRIDE=dark` (party / calm / dark / dreamy / epic) to force a vibe. Each song writes to its own folder, `outputs/<song_name>/` (videos, images, prompts, metrics, figures). Song audio and
+  Add `VISUAL_STYLE=modes` for the per-shape motion modes instead of the psychedelic style, or `VIBE_OVERRIDE=dark` (party / calm / dark / dreamy / epic) to force a vibe. Each song writes to its own folder, `outputs/<song_name>/` (videos, images, prompts, metrics, figures). Song audio and
   song videos are git-ignored.
 
 ## Run on Google Colab
