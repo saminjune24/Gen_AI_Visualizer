@@ -3,7 +3,10 @@
 A single Jupyter Notebook ([`genai_audio_visualizer.ipynb`](genai_audio_visualizer.ipynb)) that turns a short music clip into an
 audio-reactive video. It combines **generative AI** (SD-Turbo creates one abstract image per song section, prompted from that
 section's measured audio features) with **procedural animation** (beats, bass/mid/high energy, RMS, onsets and spectral brightness
-drive zoom, rings, rotation, particles, brightness and crossfades). It compares the result against a **non-audio-conditioned
+and the separated **instrument stems** (drums / bass / vocals / other, via Demucs) move the **parts of each generated image**:
+the core grows with the bass, the inner star twists with the vocals, the outer star counter-rotates with the other instruments,
+line art and light spots flash and change colour on drum hits). A zero-shot audio model (CLAP) picks the song's **vibe**, which sets
+the theme and palette of every prompt. It compares the result against a **non-audio-conditioned
 baseline** that uses the same images and effects.
 
 **Research question:** can audio-derived features guide generative artwork and procedural animation to produce a visualization that
@@ -30,10 +33,12 @@ audio -> features -> sections -> prompts -> SD-Turbo images -> frame-level contr
 |---|---|
 | 3. Configuration | every tunable parameter in one cell |
 | 4. Load audio | file or a synthesized 30 s, 4-part demo track |
-| 5–7. Features | onset strength, beats, RMS, spectral centroid, low/mid/high band energy, then smoothing, robust normalization and a 24 fps control timeline |
+| 5–7. Features | onset strength, beats, RMS, spectral centroid, low/mid/high band energy, **Demucs instrument stems + drum hits**, then smoothing, robust normalization and a 24 fps control timeline |
 | 8–9. Sections | change-point detection on an activity curve (equal-window fallback) plus a per-section summary |
-| 10–11. GenAI | feature-driven prompts and SD-Turbo generation, with images cached in `outputs/images/` |
-| 12–14. Render | OpenCV renderer with 7 layers, then FFmpeg muxes in the original audio |
+| 9.1 Vibe | CLAP zero-shot vibe (party / calm / dark / dreamy / epic) → prompt theme |
+| 10–11. GenAI | structure + vibe + feature-driven prompts and SD-Turbo generation, with images cached in `outputs/images/` |
+| 11.1 Layers | each image split into core / inner star / outer star (radial masks), line art (edges) and light spots |
+| 12–14. Render | polar-warp renderer that moves each image part with its own signal, then FFmpeg muxes in the original audio |
 | 15. Baseline | same images/effects, preset fixed-rate controls that never read the audio |
 | 16. Checks | motion energy from rendered frames, correlations, cross-correlation lag, QA |
 | 17. Survey | counterbalanced A/B design, response template and analysis helper |
@@ -48,7 +53,8 @@ python3.13 -m venv .venv
 .venv/bin/jupyter nbconvert --to notebook --execute --inplace genai_audio_visualizer.ipynb
 ```
 
-* Image generation uses CUDA if available, Apple-silicon MPS otherwise, then CPU. The first run downloads SD-Turbo (~2.5 GB).
+* Image generation uses CUDA if available, Apple-silicon MPS otherwise, then CPU. The first run downloads SD-Turbo (~2.5 GB),
+  the Demucs model (~80 MB, runs on CPU: ~15 s per 30 s clip) and CLAP (~600 MB).
 * The section images are committed, so re-running the notebook **does not regenerate them** unless the prompts change or
   `FORCE_REGENERATE = True`.
 * A full run takes about 1.5 minutes on an Apple-silicon laptop when images are cached.

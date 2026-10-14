@@ -29,7 +29,8 @@ This notebook turns a short music clip into an animated music visualizer that co
 | Part | What it does |
 |---|---|
 | **Generative** | A pretrained text-to-image diffusion model (SD-Turbo) creates one abstract image **per analysis section** of the song. Each prompt is built from that section's measured audio statistics. |
-| **Procedural** | Python (NumPy + OpenCV) animates and crossfades those images frame by frame, driven by the real audio features: beats, low/mid/high frequency energy, RMS energy, onset strength and spectral brightness. |
+| **Procedural** | Python (NumPy + OpenCV) splits each generated image into parts (core, inner star, outer star, line art, light spots) and moves **each part** with a different musical signal: beats, low/mid/high frequency energy, RMS energy, onset strength, spectral brightness and the separated **instrument stems** (drums, bass, vocals, other). |
+| **Vibe** | A pretrained audio-text model (CLAP) guesses the song's overall vibe (party, calm, dark, dreamy, epic), which sets the theme and palette of every prompt. |
 
 ### Research question
 > Can audio-derived features be used to guide generative artwork and procedural animation to create a visualization that feels more synchronized and connected to the music than a non-audio-conditioned visualizer?
@@ -43,7 +44,8 @@ To test this, the notebook renders **two videos** that share the same song, the 
 2. **Baseline**: the same effects are driven by preset, fixed-rate rules that never look at the audio.
 
 ### What this notebook deliberately does *not* do
-No frame-by-frame diffusion video, no real-time rendering, no model training, no mood classifier, no 3D. Images are generated once (3–4 total) and cached.
+No frame-by-frame diffusion video, no real-time rendering, no model training, no animated people, no 3D. Images are generated once (3–4 total) and cached;
+all motion comes from warping the parts of those images.
 """)
 
 # =============================================================================
@@ -106,7 +108,8 @@ FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()   # path to the bundled ffmpeg binary
 
 # One consistent colour per series across all plots (fixed order, never cycled).
 COLORS = {"rms": "#2a78d6", "bass": "#eb6834", "mid": "#1baf7a", "high": "#eda100",
-          "centroid": "#e87ba4", "onset": "#6250d6", "beat": "#52514e", "baseline": "#e34948"}
+          "centroid": "#e87ba4", "onset": "#6250d6", "beat": "#52514e", "baseline": "#e34948",
+          "drums": "#6250d6", "bass_stem": "#eb6834", "other": "#1baf7a", "vocals": "#e87ba4"}
 plt.rcParams.update({"figure.dpi": 100, "axes.spines.top": False, "axes.spines.right": False,
                      "axes.grid": True, "grid.alpha": 0.25})
 
@@ -154,6 +157,14 @@ BANDS = {"bass": (20, 250), "mid": (250, 2000), "high": (2000, 8000)}
 
 PULSE_DECAY = 8.0             # k in pulse(t) = exp(-k * time_since_event); 8 -> half-life ~ 87 ms
 
+# ---- Instrument stems (section 5.1) ----------------------------------------------------
+DEMUCS_MODEL    = "htdemucs"  # pretrained source-separation model: drums / bass / other / vocals
+STEM_PRESENCE   = 0.15        # a stem counts as "present" if its loud level is >= 15% of the full mix
+
+# ---- Vibe (section 9.1) ------------------------------------------------------------------
+CLAP_MODEL    = "laion/clap-htsat-unfused"
+VIBE_OVERRIDE = None          # e.g. "calm" to force a vibe; None = detect it from the audio
+
 # ---- Sections -------------------------------------------------------------------
 N_SECTIONS      = 4           # target number of analysis sections (3-4)
 MIN_SECTION_SEC = 4.5         # minimum section length; also the minimum spacing between boundaries
@@ -164,7 +175,7 @@ ACTIVITY_SMOOTH_SEC = 1.0     # extra smoothing before looking for change points
 MODEL_ID        = "stabilityai/sd-turbo"
 IMAGE_SIZE      = 512         # SD-Turbo's native resolution
 GEN_STEPS       = 2           # SD-Turbo is designed for 1-4 steps
-RANDOM_SEED     = 42          # same seed for every section -> related compositions
+RANDOM_SEED     = 42          # section N uses seed RANDOM_SEED + N (shared prompt structure keeps them related)
 FORCE_REGENERATE = False      # True = ignore cached images and generate again
 
 # ---- Video ----------------------------------------------------------------------------
@@ -174,26 +185,31 @@ CROSSFADE_SECONDS = 1.0       # length of the blend between section images
 PREVIEW_SECONDS   = 8.0       # length of the quick preview render
 
 # ---- Visual mapping coefficients (section 12) ------------------------------------------
+# Image parts are defined by radius from the centre (0 = centre, 1 = edge of the frame).
 VIS = {
-    "zoom_base": 1.02,  "zoom_bass": 0.10,  "zoom_beat": 0.03,   # image scale
-    "bg_rot_base": 2.0,  "bg_rot_mid": 6.0,                     # background rotation, deg/s
-    "ring_base": 0.22,   "ring_beat": 0.18,                     # ring radius (fraction of frame) and beat expansion
-    "ring_thick_base": 2, "ring_thick_bass": 12,                # ring thickness (px)
-    "poly_rot_base": 15.0, "poly_rot_mid": 90.0,                # polygon rotation, deg/s
-    "ribbon_amp_base": 0.02, "ribbon_amp_mid": 0.10,            # ribbon amplitude (fraction of frame)
-    "particles_min": 40,  "particles_range": 360,              # number of visible particles
-    "brightness_base": 0.75, "brightness_rms": 0.40,           # overall gain
+    "core_radius": 0.24, "inner_radius": 0.58, "mask_softness": 0.08,   # core | inner star | outer star
+    "zoom_base": 1.00, "zoom_bass": 0.04,                  # whole-image zoom
+    "core_scale_bass": 0.22, "core_scale_beat": 0.10,      # core grows with the bass stem and on beats
+    "core_rot_base": 4.0,                                  # core rotation, deg/s
+    "inner_rot_base": 8.0, "inner_rot_lead": 80.0,         # inner star rotation (clockwise), deg/s
+    "swirl_lead": 1.6,                                     # extra twist (radians) across the inner star
+    "outer_rot_base": 5.0, "outer_rot_other": 45.0,        # outer star rotation (counter-clockwise), deg/s
+    "outer_scale_beat": 0.05,                              # outer star pulses on beats
+    "ripple_high": 0.012, "ripple_waves": 7, "ripple_speed": 2.5,   # fine ripple from the high band
+    "lines_base": 0.05, "lines_drums": 0.55, "lines_stretch": 0.06, # line art flashes/stretches on drum hits
+    "lights_base": 0.15, "lights_drums": 0.65, "lights_rms": 0.10, "light_hue_step": 0.13,  # light spots recolour
+    "particles_min": 30, "particles_range": 250,           # number of visible particles (high band)
+    "brightness_base": 0.70, "brightness_rms": 0.25,       # overall gain
     "saturation_base": 0.80, "saturation_rms": 0.50,
-    "sharpness_base": 0.90, "sharpness_centroid": 0.30,        # >1 sharpens, <1 softens
-    "flash_onset": 0.30,                                       # max additive white flash
-    "overlay_strength": 0.85,                                  # opacity of the procedural layers
+    "sharpness_base": 0.90, "sharpness_centroid": 0.30,    # >1 sharpens, <1 softens
+    "flash_onset": 0.12,                                   # max additive white flash
 }
 
 # ---- Baseline (section 15): fixed rules that never read the audio ------------------------
 BASELINE_PULSE_PERIOD  = 0.70   # seconds between preset pulses (deliberately not the song's tempo)
 BASELINE_FLASH_PERIOD  = 2.80   # seconds between preset flashes
 BASELINE_BRIGHT_PERIOD = 10.0   # seconds per slow brightness cycle
-BASELINE_LEVEL         = 0.5    # fixed "medium" value used in place of bass/mid/high/rms/centroid
+BASELINE_LEVEL         = 0.5    # fixed "medium" value used in place of every continuous audio control
 
 RENDER_SHIFTED_CHECK   = False  # optional robustness check: audio controls circularly shifted in time
 BASELINE_SHIFT_SECONDS = 6.0
@@ -201,7 +217,8 @@ BASELINE_SHIFT_SECONDS = 6.0
 # ---- Derived paths --------------------------------------------------------------------------
 IMAGE_DIR = OUTPUT_DIR / "images"
 FIG_DIR   = OUTPUT_DIR / "figures"
-for d in (OUTPUT_DIR, IMAGE_DIR, FIG_DIR):
+STEMS_DIR = OUTPUT_DIR / "stems"
+for d in (OUTPUT_DIR, IMAGE_DIR, FIG_DIR, STEMS_DIR):
     d.mkdir(parents=True, exist_ok=True)
 """)
 
@@ -385,6 +402,107 @@ plt.tight_layout(); plt.savefig(FIG_DIR / "features_raw.png"); plt.show()
 """)
 
 # =============================================================================
+# 5.1 Instrument stems
+# =============================================================================
+md(r"""
+### 5.1 Separate the instruments (Demucs stems)
+
+Frequency bands mix every instrument together: a bass guitar, a kick drum and the low end of a vocal all land in the "bass" band.
+To react to **instruments**, the clip is separated into four stems with the pretrained **[Demucs](https://github.com/adefossez/demucs)**
+model (`htdemucs`): **drums, bass, other** (synths, guitars, keys) and **vocals**.
+
+Each stem then gets its own RMS envelope, and the drum stem gets its own onset (hit) detector. Separation is imperfect: some sound
+leaks between stems. A stem whose loud level stays below `STEM_PRESENCE` × the full mix is treated as **absent** (e.g. no vocals in an
+instrumental) so that leakage noise is not amplified by normalization.
+
+Stems are cached in `outputs/.../stems/`. If Demucs is unavailable, a clearly labelled **proxy** is used instead
+(harmonic/percussive separation: percussive ≈ drums, low harmonic ≈ bass, other harmonic ≈ other, no vocals).
+""")
+
+code(r"""
+STEM_NAMES = ["drums", "bass", "other", "vocals"]
+stem_key = {"source": AUDIO_SOURCE, "start": CLIP_START, "duration": round(DURATION, 3), "model": DEMUCS_MODEL}
+key_file = STEMS_DIR / "source.json"
+
+def load_cached_stems():
+    if key_file.exists() and json.loads(key_file.read_text()) == stem_key:
+        if all((STEMS_DIR / f"{n}.wav").exists() for n in STEM_NAMES):
+            return {n: librosa.load(STEMS_DIR / f"{n}.wav", sr=SR)[0] for n in STEM_NAMES}
+    return None
+
+def demucs_stems(y):
+    from demucs.pretrained import get_model
+    from demucs.apply import apply_model
+    model = get_model(DEMUCS_MODEL).eval()
+    y_model = librosa.resample(y, orig_sr=SR, target_sr=model.samplerate)
+    wav = torch.tensor(np.stack([y_model, y_model]), dtype=torch.float32)[None]   # (batch, stereo, samples)
+    device = "cuda" if DEVICE == "cuda" else "cpu"       # MPS lacks an operation Demucs needs
+    with torch.no_grad():
+        out = apply_model(model, wav, device=device, split=True, overlap=0.25, progress=False)[0]
+    return {name: librosa.resample(out[i].mean(0).numpy(), orig_sr=model.samplerate, target_sr=SR)
+            for i, name in enumerate(model.sources)}
+
+def proxy_stems(y):
+    # Fallback without Demucs: harmonic/percussive separation + a low-pass split of the harmonic part.
+    harmonic, percussive = librosa.effects.hpss(y)
+    H = librosa.stft(harmonic, n_fft=N_FFT, hop_length=HOP_LENGTH)
+    low = (freqs < BANDS["bass"][1])[:, None]
+    return {"drums": percussive,
+            "bass": librosa.istft(H * low, hop_length=HOP_LENGTH, length=len(y)),
+            "other": librosa.istft(H * ~low, hop_length=HOP_LENGTH, length=len(y)),
+            "vocals": np.zeros_like(y)}
+
+stems = load_cached_stems()
+if stems is not None:
+    STEM_METHOD = f"Demucs {DEMUCS_MODEL} (cached)"
+else:
+    try:
+        stems = demucs_stems(y)
+        STEM_METHOD = f"Demucs {DEMUCS_MODEL}"
+    except Exception as e:
+        print(f"Demucs unavailable ({type(e).__name__}: {e}); using PROXY stems")
+        stems = proxy_stems(y)
+        STEM_METHOD = "proxy (HPSS)"
+    for name in STEM_NAMES:
+        sf.write(STEMS_DIR / f"{name}.wav", stems[name], SR)
+    key_file.write_text(json.dumps(stem_key))
+stems = {n: librosa.util.fix_length(stems[n], size=len(y)) for n in STEM_NAMES}
+
+# Per-stem RMS on the same frames as every other feature
+stem_rms = {n: librosa.feature.rms(y=stems[n], frame_length=N_FFT, hop_length=HOP_LENGTH)[0][:n_feat_frames]
+            for n in STEM_NAMES}
+mix_level = np.percentile(rms, 95)
+stem_present = {n: bool(np.percentile(stem_rms[n], 95) >= STEM_PRESENCE * mix_level) for n in STEM_NAMES}
+
+# Drum hits: onset detection on the drum stem only
+drum_env = librosa.onset.onset_strength(y=stems["drums"], sr=SR, hop_length=HOP_LENGTH)
+drum_frames = librosa.onset.onset_detect(onset_envelope=drum_env, sr=SR, hop_length=HOP_LENGTH)
+drum_times = librosa.frames_to_time(drum_frames, sr=SR, hop_length=HOP_LENGTH)
+drum_strength = drum_env[drum_frames] / (np.percentile(drum_env[drum_frames], 95) + 1e-9) if len(drum_frames) else []
+drum_strength = np.clip(drum_strength, 0, 1)
+
+print(f"Stem method: {STEM_METHOD}")
+for n in STEM_NAMES:
+    print(f"  {n:<7} loud level {np.percentile(stem_rms[n], 95) / mix_level:5.0%} of mix -> "
+          f"{'present' if stem_present[n] else 'ABSENT (treated as silent)'}")
+print(f"Drum hits detected: {len(drum_times)}")
+""")
+
+code(r"""
+fig, axes = plt.subplots(4, 1, figsize=(12, 7.5), sharex=True)
+for ax, n in zip(axes, STEM_NAMES):
+    color = COLORS["bass_stem" if n == "bass" else n]
+    ax.plot(feat_times, stem_rms[n], color=color, lw=0.9)
+    if n == "drums":
+        ax.vlines(drum_times, 0, stem_rms[n].max(), color=COLORS["beat"], lw=0.5, ls=":", label="drum hits")
+        ax.legend(loc="upper left")
+    ax.set(ylabel="RMS", title=f"{n} stem" + ("" if stem_present[n] else " (absent)"))
+axes[-1].set(xlabel="time (s)", xlim=(0, DURATION))
+plt.tight_layout(); plt.savefig(FIG_DIR / "stems.png"); plt.show()
+display(Audio(stems["drums"], rate=SR))
+""")
+
+# =============================================================================
 # 6. Smooth & normalize
 # =============================================================================
 md(r"""
@@ -414,6 +532,12 @@ for name in ["rms", "centroid", "bass", "mid", "high"]:
     smoothed = uniform_filter1d(raw[name].values.astype(float), size=smooth_frames, mode="nearest")
     feat[name] = robust_normalize(smoothed)
 feat["onset"] = robust_normalize(raw["onset"].values)       # events: normalize only
+
+# Instrument stems: same smoothing + normalization; absent stems stay at zero
+for n in STEM_NAMES:
+    col = "bass_stem" if n == "bass" else n
+    smoothed = uniform_filter1d(stem_rms[n].astype(float), size=smooth_frames, mode="nearest")
+    feat[col] = robust_normalize(smoothed) if stem_present[n] else 0.0
 
 assert feat.drop(columns="time_sec").apply(lambda c: c.between(0, 1).all()).all()
 feat.describe().T[["mean", "std", "min", "max"]].round(3)
@@ -474,14 +598,25 @@ per_video_frame = int(np.ceil(SR / HOP_LENGTH / FPS)) + 1
 timeline["onset"] = np.interp(frame_times, feat_times, maximum_filter1d(feat["onset"].values, size=per_video_frame))
 timeline["beat_pulse"] = event_envelope(beat_times, frame_times)
 timeline["onset_pulse"] = event_envelope(onset_times, frame_times, weights=feat["onset"].values[onset_frames])
+
+# Instrument controls
+for col in ["drums", "bass_stem", "other", "vocals"]:
+    timeline[col] = np.interp(frame_times, feat_times, feat[col])
+# "lead" = the melodic voice that twists the inner star: vocals if the song has them, otherwise the mid band
+LEAD_SOURCE = "vocals" if stem_present["vocals"] else "mid band"
+timeline["lead"] = timeline["vocals"] if stem_present["vocals"] else timeline["mid"]
+timeline["drum_pulse"] = event_envelope(drum_times, frame_times, weights=drum_strength)
+timeline["drum_hits"] = np.searchsorted(drum_times, frame_times, side="right")   # running count (light colours)
 timeline["section_id"] = 0          # placeholder, set in section 8
 
 # Acceptance checks
 assert len(timeline) == N_FRAMES == round(DURATION * FPS)
 assert not timeline.isna().any().any(), "NaNs in timeline"
-controls = ["rms", "bass", "mid", "high", "centroid", "onset", "beat_pulse", "onset_pulse"]
+controls = ["rms", "bass", "mid", "high", "centroid", "onset", "beat_pulse", "onset_pulse",
+            "drums", "bass_stem", "other", "vocals", "lead", "drum_pulse"]
 assert timeline[controls].apply(lambda c: c.between(0, 1).all()).all(), "controls out of [0, 1]"
 print(f"Timeline: {N_FRAMES} frames = {DURATION:.2f} s x {FPS} fps, all controls within [0, 1], no NaNs")
+print(f"Lead (inner-star twist) follows: {LEAD_SOURCE}")
 timeline.head(8).round(3)
 """)
 
@@ -489,9 +624,10 @@ code(r"""
 fig, ax = plt.subplots(figsize=(12, 2.8))
 seg = timeline[(timeline.time_sec >= 8) & (timeline.time_sec < 14)]
 ax.plot(seg.time_sec, seg.beat_pulse, color=COLORS["beat"], lw=1.5, label="beat pulse envelope")
-ax.plot(seg.time_sec, seg.bass, color=COLORS["bass"], lw=1.5, label="bass (smoothed)")
+ax.plot(seg.time_sec, seg.drum_pulse, color=COLORS["drums"], lw=1.2, label="drum-hit pulse")
+ax.plot(seg.time_sec, seg.bass_stem, color=COLORS["bass"], lw=1.5, label="bass stem (smoothed)")
 ax.vlines(beat_times[(beat_times >= 8) & (beat_times < 14)], 0, 1, color=COLORS["beat"], lw=0.6, ls=":")
-ax.set(title="Control timeline close-up (8-14 s): each detected beat (dotted) becomes a decaying pulse",
+ax.set(title="Control timeline close-up (8-14 s): beats (dotted) and drum hits become decaying pulses",
        xlabel="time (s)", ylabel="value (0-1)")
 ax.legend(loc="upper right")
 plt.tight_layout(); plt.savefig(FIG_DIR / "timeline_closeup.png"); plt.show()
@@ -597,6 +733,75 @@ sections.round(2)
 """)
 
 # =============================================================================
+# 9.1 Vibe
+# =============================================================================
+md(r"""
+## 9.1 Detect the vibe (CLAP)
+
+**[CLAP](https://huggingface.co/laion/clap-htsat-unfused)** (Contrastive Language-Audio Pretraining) is a pretrained model that embeds audio
+and text in the same space, so it can score how well the clip matches each text label without any training (**zero-shot**).
+The clip is cut into 10-second windows (CLAP's training length), each window is scored against five vibe descriptions, and the
+probabilities are averaged. The winning vibe sets the **theme and palette** shared by every section prompt.
+
+This is a genre-level guess, not a validated mood classifier. If CLAP cannot be loaded, a simple rule based on tempo, onset rate and
+brightness is used instead. Set `VIBE_OVERRIDE` in the config to force a vibe.
+""")
+
+code(r"""
+VIBES = {   # vibe -> text description CLAP compares the audio against
+    "party":  "energetic party dance music",
+    "calm":   "calm relaxing ambient music",
+    "dark":   "dark intense aggressive music",
+    "dreamy": "dreamy emotional melancholic music",
+    "epic":   "epic cinematic orchestral music",
+}
+
+def vibe_scores_clap(y):
+    from transformers import ClapModel, ClapProcessor
+    model = ClapModel.from_pretrained(CLAP_MODEL).eval()
+    processor = ClapProcessor.from_pretrained(CLAP_MODEL)
+    clap_sr = 48000
+    y48 = librosa.resample(y, orig_sr=SR, target_sr=clap_sr)
+    win = 10 * clap_sr
+    windows = [y48[i:i + win] for i in range(0, max(1, len(y48) - win + 1), win)]
+    inputs = processor(text=list(VIBES.values()), audio=windows, sampling_rate=clap_sr, return_tensors="pt", padding=True)
+    with torch.no_grad():
+        probs = model(**inputs).logits_per_audio.softmax(dim=-1).mean(dim=0).numpy()   # average over windows
+    return dict(zip(VIBES, probs))
+
+def vibe_scores_rules():
+    # Fallback: fast + busy -> party, sparse + dark -> calm, otherwise dreamy.
+    onset_rate = len(onset_times) / DURATION
+    if tempo >= 110 and onset_rate >= 3:
+        pick = "party"
+    elif onset_rate < 1.5 and centroid.mean() < 1500:
+        pick = "calm"
+    else:
+        pick = "dreamy"
+    return {v: float(v == pick) for v in VIBES}
+
+try:
+    vibe_scores = vibe_scores_clap(y)
+    VIBE_METHOD = f"CLAP zero-shot ({CLAP_MODEL})"
+except Exception as e:
+    print(f"CLAP unavailable ({type(e).__name__}: {e}); using rule-based vibe")
+    vibe_scores, VIBE_METHOD = vibe_scores_rules(), "rule-based fallback"
+
+VIBE = VIBE_OVERRIDE or max(vibe_scores, key=vibe_scores.get)
+print(f"Vibe: {VIBE}  ({VIBE_METHOD}{', overridden' if VIBE_OVERRIDE else ''})")
+
+fig, ax = plt.subplots(figsize=(7, 2.6))
+names = list(vibe_scores)
+ax.barh(names, [vibe_scores[n] for n in names],
+        color=[COLORS["rms"] if n == VIBE else "#c3c2b7" for n in names], height=0.6)
+for k, n in enumerate(names):
+    ax.text(vibe_scores[n] + 0.01, k, f"{vibe_scores[n]:.0%}", va="center", fontsize=9)
+ax.set(xlim=(0, 1.1), xlabel="probability", title="Vibe scores (CLAP, averaged over 10 s windows)")
+ax.invert_yaxis(); ax.grid(axis="y", visible=False)
+plt.tight_layout(); plt.savefig(FIG_DIR / "vibe.png"); plt.show()
+""")
+
+# =============================================================================
 # 10. Prompts
 # =============================================================================
 md(r"""
@@ -604,7 +809,15 @@ md(r"""
 
 The diffusion model never sees the waveform. Instead each section goes through a transparent chain:
 
-`section statistics → low / medium / high levels → visual descriptors → text prompt → image`
+`vibe + section statistics → low / medium / high levels → visual descriptors → text prompt → image`
+
+Every prompt has three parts:
+
+1. **Fixed structure** (same for all sections): *a glowing star inside a larger star with radiating light lines, centred on a dark
+   background*. This is deliberate: the renderer (section 13) animates the image **part by part by radius** (core, inner star,
+   outer star), so the images need a centred, layered radial structure.
+2. **Vibe theme** (same for all sections, from section 9.1): colours and lighting, e.g. *neon club lights* for party.
+3. **Section descriptors** (different per section): one short phrase per measured feature.
 
 **Levels** (documented design thresholds): `0.00–0.33 → low`, `0.33–0.67 → medium`, `0.67–1.00 → high`.
 
@@ -612,48 +825,44 @@ The diffusion model never sees the waveform. Instead each section goes through a
 mapping uses *large, broad* forms for bass and *small, fine* details for highs. This is a cross-modal **design choice**; the program
 measures frequency, and the images do not physically depict acoustic wavelength.
 
-**Prompt length.** SD-Turbo's CLIP text encoder reads at most **77 tokens**; anything beyond is silently cut off. So the model prompt is
-kept compact (shared base style + one short phrase per feature), and the full readable sentence is stored separately in
-`section_description`. A token count check below confirms nothing is truncated. (With `guidance_scale = 0`, SD-Turbo ignores negative
-prompts, so "no text / no people" is enforced by keeping the vocabulary abstract rather than by a negative prompt.)
+**Prompt length.** SD-Turbo's CLIP text encoder reads at most **77 tokens**; anything beyond is silently cut off, so phrases are kept
+short and a token check confirms nothing is truncated. The full readable sentence is stored separately in `section_description`.
+(With `guidance_scale = 0`, SD-Turbo ignores negative prompts, so "no text / no people" is enforced by keeping the vocabulary abstract.)
 """)
 
 code(r"""
 def level(x):
     return "low" if x < 1 / 3 else ("medium" if x < 2 / 3 else "high")
 
-# Shared visual identity: identical start for every prompt so the images feel related
-BASE_STYLE = ("abstract geometric audio-visual artwork, luminous digital art, centered composition, "
-              "layered geometry, atmospheric depth, dark background")
+# 1. Fixed structure shared by every section (the renderer animates these parts)
+STRUCTURE = ("luminous digital art, centered radial mandala, glowing star inside a larger star, "
+             "radiating light lines, dark background")
 
-# One short descriptor per feature and level (guide section 9.3)
+# 2. Vibe theme shared by every section
+VIBE_THEMES = {
+    "party":  "neon club lights, laser beams, magenta and cyan glow",
+    "calm":   "soft mist, pastel light, gentle glow",
+    "dark":   "deep red and black, smoke, harsh light",
+    "dreamy": "nebula haze, violet and pink glow, soft bokeh",
+    "epic":   "golden light rays, vast cosmic scale",
+}
+
+# 3. One short descriptor per feature and level
 DESCRIPTORS = {
-    "rms":      {"low": "sparse calm dim open space",
-                 "medium": "layered active moderately bright",
-                 "high": "dense intense dramatic glow"},
-    "bass":     {"low": "small delicate central form",
-                 "medium": "medium circular structures",
-                 "high": "huge circular rings, heavy central mass, broad waves"},
-    "mid":      {"low": "simple inner structure",
-                 "medium": "some layered polygons",
-                 "high": "layered rotating polygons and ribbons"},
-    "high":     {"low": "smooth surfaces",
-                 "medium": "some fine lines",
-                 "high": "fine particles, thin lines, sparkling micro detail"},
-    "centroid": {"low": "soft rounded edges, warm amber violet light",
-                 "medium": "balanced edges, violet and teal light",
-                 "high": "crisp sharp edges, cool cyan white highlights"},
-    "onset_density_rel": {"low": "few separate elements",
-                          "medium": "several accents",
-                          "high": "fragmented geometry, many bursts"},
+    "rms":      {"low": "sparse dim calm", "medium": "layered moderately bright", "high": "dense intense glow"},
+    "bass":     {"low": "small central core", "medium": "round central core", "high": "huge glowing core, thick rings"},
+    "mid":      {"low": "simple star shape", "medium": "layered star points", "high": "many layered star points, ribbons"},
+    "high":     {"low": "smooth surfaces", "medium": "some fine lines", "high": "fine particles, thin sparkling lines"},
+    "centroid": {"low": "soft rounded edges", "medium": "balanced edges", "high": "crisp sharp edges"},
+    "onset_density_rel": {"low": "few elements", "medium": "several accents", "high": "fragmented bursts"},
 }
 FEATURES_FOR_PROMPT = ["rms", "bass", "mid", "high", "centroid", "onset_density_rel"]
 
 def build_prompt(row):
     levels = {f: level(row[f]) for f in FEATURES_FOR_PROMPT}
     phrases = [DESCRIPTORS[f][levels[f]] for f in FEATURES_FOR_PROMPT]
-    prompt = BASE_STYLE + ", " + ", ".join(phrases)
-    description = (f"This section has {levels['rms']} energy with {levels['bass']} low-frequency presence, "
+    prompt = ", ".join([STRUCTURE, VIBE_THEMES[VIBE]] + phrases)
+    description = (f"A {VIBE} song. This section has {levels['rms']} energy with {levels['bass']} low-frequency presence, "
                    f"{levels['mid']} mid-frequency activity, {levels['high']} high-frequency detail, "
                    f"{levels['centroid']} spectral brightness and {levels['onset_density_rel']} onset density.")
     return prompt, description, levels
@@ -662,9 +871,9 @@ records = []
 for _, row in sections.iterrows():
     prompt, description, levels = build_prompt(row)
     s = int(row.section)
-    records.append({"section": s, **{f"{k}_level": v for k, v in levels.items()},
+    records.append({"section": s, "vibe": VIBE, **{f"{k}_level": v for k, v in levels.items()},
                     "section_description": description, "prompt": prompt,
-                    "seed": RANDOM_SEED, "model": MODEL_ID, "steps": GEN_STEPS, "guidance_scale": 0.0,
+                    "seed": RANDOM_SEED + s, "model": MODEL_ID, "steps": GEN_STEPS, "guidance_scale": 0.0,
                     "size": f"{IMAGE_SIZE}x{IMAGE_SIZE}", "image_path": str(IMAGE_DIR / f"section_{s}.png")})
 prompts = pd.DataFrame(records)
 
@@ -683,7 +892,7 @@ try:
 except OSError as e:
     print("Tokenizer not available offline, skipping token check:", e)
 
-prompts[["section", "rms_level", "bass_level", "mid_level", "high_level", "centroid_level", "onset_density_rel_level"]]
+prompts[["section", "vibe", "rms_level", "bass_level", "mid_level", "high_level", "centroid_level", "onset_density_rel_level"]]
 """)
 
 # =============================================================================
@@ -699,7 +908,8 @@ It is light enough for a free Colab T4 or an Apple-silicon laptop. Before publis
 **Caching:** each image is saved to `outputs/images/section_N.png` together with `outputs/prompts.csv`. On later runs an image is only
 regenerated if its prompt or settings changed (or `FORCE_REGENERATE = True`), so the notebook can be re-run without the GPU.
 
-**Consistency:** all sections use the same seed, so the starting noise is identical and the compositions stay related; only the prompt changes.
+**Consistency vs. variety:** every prompt shares the same structure and vibe theme, which keeps the images related. Each section uses
+its own seed (`RANDOM_SEED + section`), so sections with similar statistics still get visibly different artwork.
 
 If diffusion is unavailable (no `diffusers` / download fails), a clearly labelled **placeholder gradient** is used so the rest of the
 pipeline still runs. Placeholders are *not* valid project results.
@@ -769,27 +979,91 @@ plt.tight_layout(); plt.savefig(FIG_DIR / "section_images.png"); plt.show()
 """)
 
 # =============================================================================
+# 11.1 Layers
+# =============================================================================
+md(r"""
+## 11.1 Split each generated image into movable parts
+
+To move the **parts** of an image (not just the whole picture), every section image is decomposed once into:
+
+| Part | How it is found | Why it works |
+|---|---|---|
+| **Core**, **inner star**, **outer star** | soft radial masks: radius < 0.24, 0.24–0.58, > 0.58 of the half-frame | the prompts ask for a centred star inside a larger star, so the parts sit at different radii |
+| **Line art** | Canny edge detection on a blurred copy of the image (main structural lines only) | the image's own lines become a separate glowing layer |
+| **Light spots** | pixels brighter than the image's 92nd luminance percentile | the image's own bright spots act as "stage lights" |
+
+The masks are soft (they fade over `mask_softness`), so neighbouring parts blend when they rotate at different speeds; this is
+what produces the visible *twist* between the inner and outer star.
+""")
+
+code(r"""
+S = OUTPUT_SIZE
+yy, xx = np.mgrid[0:S, 0:S].astype(np.float32)
+CX = CY = (S - 1) / 2
+RADIUS = np.hypot(xx - CX, yy - CY) / (S / 2)          # 0 at the centre, 1 at the frame edge
+THETA = np.arctan2(yy - CY, xx - CX)
+
+def smoothstep(edge0, edge1, x):
+    t = np.clip((x - edge0) / (edge1 - edge0), 0, 1)
+    return t * t * (3 - 2 * t)
+
+def part_weights(r, core_radius, inner_radius, soft=VIS["mask_softness"]):
+    # Soft weights (sum to 1) for core / inner star / outer star at radius r.
+    to_inner = smoothstep(core_radius - soft, core_radius + soft, r)
+    to_outer = smoothstep(inner_radius - soft, inner_radius + soft, r)
+    return 1 - to_inner, to_inner * (1 - to_outer), to_outer
+
+def decompose(img):
+    # Line-art layer and light-spot layer of one section image (float RGB in [0, 1]).
+    gray = cv2.cvtColor((img * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY)
+    # Blur first so only the main structural lines survive, not every fine texture detail
+    edges = cv2.Canny(cv2.GaussianBlur(gray, (0, 0), 2.0), 60, 140)
+    lines = cv2.GaussianBlur(edges.astype(np.float32) / 255, (0, 0), 1.0)
+    lines /= lines.max() + 1e-6
+    lum = gray.astype(np.float32) / 255
+    lights = cv2.GaussianBlur((lum > np.percentile(lum, 92)).astype(np.float32), (0, 0), 3.0)
+    return {"lines": lines, "lights": lights}
+
+layers = [decompose(img) for img in section_images]
+
+# Show the decomposition for every section
+w_core, w_inner, w_outer = part_weights(RADIUS, VIS["core_radius"], VIS["inner_radius"])
+part_view = np.stack([w_core, w_inner, w_outer], axis=-1)            # red = core, green = inner, blue = outer
+fig, axes = plt.subplots(n_sections, 4, figsize=(11, 2.8 * n_sections))
+for k in range(n_sections):
+    for ax, im, title in zip(axes[k], [section_images[k], 0.5 * section_images[k] + 0.5 * part_view,
+                                       layers[k]["lines"], layers[k]["lights"]],
+                             ["image", "parts (core / inner / outer)", "line art", "light spots"]):
+        ax.imshow(im, cmap="gray" if im.ndim == 2 else None); ax.axis("off")
+        ax.set_title(f"S{k + 1}: {title}", fontsize=9)
+plt.tight_layout(); plt.savefig(FIG_DIR / "layers.png"); plt.show()
+""")
+
+# =============================================================================
 # 12. Mappings
 # =============================================================================
 md(r"""
 ## 12. Define audio-to-visual mappings
 
-The renderer draws seven layers. Each visual parameter is a small, inspectable formula of the normalized controls (coefficients in `VIS`):
+Each part of the image follows a different musical signal (coefficients in `VIS`). Large, slow parts follow low frequencies; small, fast
+details follow high frequencies (the wavelength-inspired grammar from section 10):
 
-| Layer | Audio control | Visual parameter | Formula |
+| Image part | Driven by | Motion | Formula (per frame) |
 |---|---|---|---|
-| 1. Section image | `section_id` | which image + crossfade | blend over `CROSSFADE_SECONDS` around each boundary |
-| 2. Low-frequency geometry | bass, beat pulse | image zoom, ring radius & thickness | `zoom = 1.02 + 0.10·bass + 0.03·beat`, `ring = 0.22 + 0.18·beat`, `thickness = 2 + 12·bass` |
-| 3. Mid-frequency geometry | mid | polygon rotation, ribbon amplitude, background rotation | `poly speed = 15 + 90·mid` °/s, `ribbon = 0.02 + 0.10·mid` |
-| 4. High-frequency detail | high | number of particles, sparkle jitter | `particles = 40 + 360·high` |
-| 5. Overall intensity | RMS | brightness, saturation | `brightness = 0.75 + 0.40·rms` |
-| 6. Spectral brightness | centroid | sharpness (unsharp mask) | `sharpness = 0.90 + 0.30·centroid` |
-| 7. Events | onset pulse | white flash | `flash = 0.30·onset_pulse` |
+| **Core** | bass stem, beat | grows / shrinks | `scale = 1 + 0.22·bass_stem + 0.10·beat` |
+| **Inner star** | lead (vocals, or mid band if no vocals) | rotates clockwise and **twists** | `speed = 8 + 80·lead` °/s, `twist = 1.6·lead` rad |
+| **Outer star** | other stem (synths, guitars, keys) | rotates counter-clockwise, pulses on beats | `speed = 5 + 45·other` °/s, `scale = 1 + 0.05·beat` |
+| **Whole image** | high band | fine fast ripple | `ripple = 0.012·high` × sin(7 waves) |
+| **Line art** | drum hits | flashes and stretches outward | `glow = 0.05 + 0.55·drum_pulse` |
+| **Light spots** | drum hits, RMS | glow, change colour on every hit | `gain = 0.15 + 0.65·drum_pulse + 0.10·rms` |
+| Particles | high band | more particles | `n = 30 + 250·high` |
+| Brightness / saturation | RMS | overall intensity | `brightness = 0.70 + 0.25·rms` |
+| Sharpness | spectral centroid | crisper when brighter | `sharpness = 0.90 + 0.30·centroid` |
+| White flash | onsets | brief flash | `flash = 0.12·onset_pulse` |
+| Section image | section id | crossfade | over `CROSSFADE_SECONDS` around each boundary |
 
-Large / slow structures follow the bass; small / fast details follow the highs (the wavelength-inspired grammar from section 10).
-
-Both the audio-conditioned version and the baseline produce a **parameter table with identical columns**; one renderer draws both.
-Rotation angles are integrated over time (`cumsum(speed) / FPS`) so speed changes never cause jumps.
+Rotation angles are integrated over time (`cumsum(speed) / FPS`) so speed changes never cause jumps. Both the audio-conditioned version
+and the baseline produce a **parameter table with identical columns**, and one renderer draws both.
 """)
 
 code(r"""
@@ -805,17 +1079,24 @@ def crossfade_plan(times, edges, crossfade=CROSSFADE_SECONDS):
 
 
 def visual_params(ctrl, edges):
-    # ctrl: DataFrame with time_sec, bass, mid, high, rms, centroid, beat_pulse, onset_pulse (all 0-1).
+    # ctrl: DataFrame of controls (all 0-1 except drum_hits). Returns one row of visual parameters per frame.
     v, t = VIS, ctrl.time_sec.values
+    deg_per_frame = lambda speed: np.cumsum(speed) / FPS           # integrate deg/s -> degrees
     p = pd.DataFrame({"time_sec": t})
     p["img_a"], p["img_b"], p["blend"] = crossfade_plan(t, edges)
-    p["zoom"] = v["zoom_base"] + v["zoom_bass"] * ctrl.bass.values + v["zoom_beat"] * ctrl.beat_pulse.values
-    p["bg_angle"] = np.cumsum(v["bg_rot_base"] + v["bg_rot_mid"] * ctrl.mid.values) / FPS
-    p["ring_radius"] = v["ring_base"] + v["ring_beat"] * ctrl.beat_pulse.values
-    p["ring_thickness"] = v["ring_thick_base"] + v["ring_thick_bass"] * ctrl.bass.values
-    p["ring_alpha"] = 0.35 + 0.65 * np.maximum(ctrl.bass.values, ctrl.beat_pulse.values)
-    p["poly_angle"] = np.cumsum(v["poly_rot_base"] + v["poly_rot_mid"] * ctrl.mid.values) / FPS
-    p["ribbon_amp"] = v["ribbon_amp_base"] + v["ribbon_amp_mid"] * ctrl.mid.values
+    p["zoom"] = v["zoom_base"] + v["zoom_bass"] * ctrl.bass.values
+    p["core_scale"] = 1 + v["core_scale_bass"] * ctrl.bass_stem.values + v["core_scale_beat"] * ctrl.beat_pulse.values
+    p["core_angle"] = deg_per_frame(np.full(len(t), v["core_rot_base"]))
+    p["inner_angle"] = deg_per_frame(v["inner_rot_base"] + v["inner_rot_lead"] * ctrl.lead.values)
+    p["inner_twist"] = v["swirl_lead"] * ctrl.lead.values
+    p["outer_angle"] = -deg_per_frame(v["outer_rot_base"] + v["outer_rot_other"] * ctrl.other.values)
+    p["outer_scale"] = 1 + v["outer_scale_beat"] * ctrl.beat_pulse.values
+    p["ripple_amp"] = v["ripple_high"] * ctrl.high.values
+    p["ripple_phase"] = 2 * np.pi * v["ripple_speed"] * t
+    p["lines_gain"] = v["lines_base"] + v["lines_drums"] * ctrl.drum_pulse.values
+    p["lines_stretch"] = 1 + v["lines_stretch"] * ctrl.drum_pulse.values
+    p["lights_gain"] = v["lights_base"] + v["lights_drums"] * ctrl.drum_pulse.values + v["lights_rms"] * ctrl.rms.values
+    p["light_hue"] = (v["light_hue_step"] * ctrl.drum_hits.values) % 1.0
     p["n_particles"] = (v["particles_min"] + v["particles_range"] * ctrl.high.values).astype(int)
     p["jitter"] = ctrl.high.values
     p["brightness"] = v["brightness_base"] + v["brightness_rms"] * ctrl.rms.values
@@ -836,11 +1117,14 @@ md(r"""
 
 For every frame the renderer reads **one row of the parameter table** (looked up by frame timestamp) and:
 
-1. blends the two current section images (crossfade),
-2. zooms and slowly rotates the blend (`cv2.warpAffine`),
-3. adjusts sharpness (unsharp mask), saturation and brightness,
-4. draws the procedural overlay on a black canvas: bass rings, mid polygon + ribbon, high-frequency particles,
-5. adds a soft glow and composites the overlay with a *screen* blend, then adds the onset flash.
+1. **Builds one warp map in polar coordinates.** Every output pixel at radius *r* and angle *θ* samples the source image at a rotated,
+   scaled position. The rotation and scale are a soft mix of the core / inner / outer settings for that radius, plus the twist (extra
+   rotation growing across the inner star) and the high-frequency ripple. One `cv2.remap` call then moves all parts at once.
+2. Crossfades the two current section images and warps them with that map. The **line-art** and **light-spot** layers are warped with
+   the same map (so they stay attached to the artwork), with an extra outward stretch on drum hits.
+3. Adjusts sharpness (unsharp mask), saturation and brightness.
+4. Recolours the light spots (a new colour on every drum hit, stronger on hits).
+5. Adds the glowing line art (accent colour of the image), particles and the onset flash.
 
 Particles have fixed random starting positions (seeded) and drift outward over time, so the particle field is identical in every
 version; only *how many* are visible depends on the controls. Frames are streamed straight to an H.264 file, and a small grayscale copy of
@@ -848,7 +1132,6 @@ each frame is kept to measure **visual motion energy** in section 16.
 """)
 
 code(r"""
-CENTER = (OUTPUT_SIZE / 2, OUTPUT_SIZE / 2)
 MAX_PARTICLES = VIS["particles_min"] + VIS["particles_range"]
 _rng = np.random.default_rng(RANDOM_SEED)
 PARTICLES = {                                     # fixed particle field shared by all renders
@@ -859,57 +1142,57 @@ PARTICLES = {                                     # fixed particle field shared 
 }
 
 def accent_color(img):
-    # Bright overlay colour derived from the image's average colour, so overlays match the artwork.
+    # Bright colour derived from the image's average colour, so the line glow matches the artwork.
     c = img.reshape(-1, 3).mean(axis=0)
-    c = c / (c.max() + 1e-6)
-    return 0.55 * c + 0.45                        # mix with white
+    return 0.55 * c / (c.max() + 1e-6) + 0.45
 
+def hue_to_rgb(h):
+    return np.array([0.5 + 0.5 * np.cos(2 * np.pi * (h - o)) for o in (0.0, 1 / 3, 2 / 3)], np.float32)
+
+def warp_maps(p, extra_scale=1.0):
+    # Source sampling coordinates for every output pixel (polar warp: per-part rotation, scale, twist, ripple).
+    w_core, w_inner, w_outer = part_weights(RADIUS, VIS["core_radius"] * p.core_scale, VIS["inner_radius"])
+    twist = p.inner_twist * w_inner * (RADIUS - VIS["core_radius"])
+    angle = np.deg2rad(w_core * p.core_angle + w_inner * p.inner_angle + w_outer * p.outer_angle) + twist
+    scale = (w_core * p.core_scale + w_inner + w_outer * p.outer_scale) * p.zoom * extra_scale
+    r_src = RADIUS / scale + p.ripple_amp * np.sin(VIS["ripple_waves"] * 2 * np.pi * RADIUS - p.ripple_phase)
+    theta_src = THETA - angle
+    map_x = (CX + r_src * np.cos(theta_src) * (S / 2)).astype(np.float32)
+    map_y = (CY + r_src * np.sin(theta_src) * (S / 2)).astype(np.float32)
+    return map_x, map_y
 
 def render_frame(p, frame_idx, images):
-    S = OUTPUT_SIZE
-    # 1. Section image crossfade
-    a, b = images[int(p.img_a)], images[int(p.img_b)]
-    img = (1 - p.blend) * a + p.blend * b
+    a, b, t = int(p.img_a), int(p.img_b), p.blend
+    mix = lambda key: (1 - t) * layers[a][key] + t * layers[b][key]
 
-    # 2. Zoom + slow rotation (bass -> zoom, mid -> rotation speed)
-    M = cv2.getRotationMatrix2D(CENTER, p.bg_angle, p.zoom)
-    img = cv2.warpAffine(img, M, (S, S), borderMode=cv2.BORDER_REFLECT)
+    # 1-2. Crossfade, then move every part of the image with one polar warp map
+    mx, my = warp_maps(p)
+    img = cv2.remap((1 - t) * images[a] + t * images[b], mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    sx, sy = warp_maps(p, extra_scale=p.lines_stretch)            # lines + lights stretch outward on drum hits
+    lines = cv2.remap(mix("lines"), sx, sy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    lights = cv2.remap(mix("lights"), sx, sy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
 
     # 3. Sharpness (centroid), saturation and brightness (RMS)
     blur = cv2.GaussianBlur(img, (0, 0), 2.0)
     img = img + (p.sharpness - 1.0) * 2.0 * (img - blur)
     gray = img.mean(axis=2, keepdims=True)
-    img = (gray + p.saturation * (img - gray)) * p.brightness
+    img = np.clip((gray + p.saturation * (img - gray)) * p.brightness, 0, 1)
 
-    # 4. Procedural overlay
-    ov = np.zeros((S, S, 3), np.float32)
-    col = tuple(float(x) for x in accent_color(a if p.blend < 0.5 else b))
-    # 4a. Bass rings: large, thick, expand on beats
-    for k, scale in enumerate((1.0, 1.45, 1.9)):
-        radius = int(p.ring_radius * scale * S / 2 * 1.4)
-        thick = max(1, int(p.ring_thickness / (k + 1)))
-        cv2.circle(ov, (S // 2, S // 2), radius, tuple(c * p.ring_alpha / (k + 1) for c in col), thick, cv2.LINE_AA)
-    # 4b. Mid polygon (rotating hexagon) and ribbon (sine wave)
-    ang = np.deg2rad(p.poly_angle) + np.arange(6) * np.pi / 3
-    pts = np.stack([S / 2 + 0.28 * S * np.cos(ang), S / 2 + 0.28 * S * np.sin(ang)], 1).astype(np.int32)
-    cv2.polylines(ov, [pts], True, tuple(0.6 * c for c in col), 2, cv2.LINE_AA)
-    xs = np.linspace(0, S, 120)
-    ys = S / 2 + p.ribbon_amp * S * np.sin(xs / S * 4 * np.pi + p.time_sec * 2.0)
-    cv2.polylines(ov, [np.stack([xs, ys], 1).astype(np.int32)], False, tuple(0.5 * c for c in col), 2, cv2.LINE_AA)
-    # 4c. High-frequency particles: small, many, drifting outward with jitter
+    # 4. Light spots take on a colour that changes on every drum hit (they glow brighter on hits)
+    g = np.clip(lights * p.lights_gain, 0, 1)[..., None]
+    img = img * (1 - g) + g * hue_to_rgb(p.light_hue)
+    # 5. Glowing line art (screen blend), particles, onset flash
+    line_col = accent_color(images[a] if t < 0.5 else images[b])
+    glow = lines + 0.8 * cv2.GaussianBlur(lines, (0, 0), 4.0)
+    overlay = np.clip(glow[..., None] * line_col * p.lines_gain, 0, 1).astype(np.float32)
     n = int(p.n_particles)
     r = (PARTICLES["r0"][:n] + PARTICLES["speed"][:n] * p.time_sec) % 0.75 * S
     jit = np.random.default_rng(frame_idx).normal(0, 1.5 * p.jitter, (n, 2))
     px = (S / 2 + r * np.cos(PARTICLES["angle"][:n]) + jit[:, 0]).astype(int)
     py = (S / 2 + r * np.sin(PARTICLES["angle"][:n]) + jit[:, 1]).astype(int)
     for x0, y0, sz in zip(px, py, PARTICLES["size"][:n]):
-        cv2.circle(ov, (int(x0), int(y0)), int(sz), (1.0, 1.0, 1.0), -1, cv2.LINE_AA)
-
-    # 5. Glow + screen blend + onset flash
-    ov = np.clip(ov + 0.8 * cv2.GaussianBlur(ov, (0, 0), 6.0), 0, 1) * VIS["overlay_strength"]
-    img = np.clip(img, 0, 1)
-    img = 1 - (1 - img) * (1 - ov)
-    img = img + p.flash
+        cv2.circle(overlay, (int(x0), int(y0)), int(sz), (1.0, 1.0, 1.0), -1, cv2.LINE_AA)
+    img = 1 - (1 - img) * (1 - overlay) + p.flash
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 
 
@@ -1009,8 +1292,9 @@ difference is where the control signals come from: preset procedural rules that 
 
 | Control | Audio-conditioned | Baseline (preset) |
 |---|---|---|
-| bass, mid, high, RMS, centroid | measured, normalized | constant `BASELINE_LEVEL` = 0.5 (mid-range of every effect) |
-| beat pulse | decays from each detected beat | same decay shape, repeating every `BASELINE_PULSE_PERIOD` = 0.70 s (not the song's tempo) |
+| bass, mid, high, centroid, instrument stems, lead | measured, normalized | constant `BASELINE_LEVEL` = 0.5 (mid-range of every effect) |
+| beat pulse, drum-hit pulse | decays from each detected beat / drum hit | same decay shape, repeating every `BASELINE_PULSE_PERIOD` = 0.70 s (not the song's tempo) |
+| light colour changes | on every drum hit | on every preset pulse |
 | onset flash | onset events × strength | fixed flash every `BASELINE_FLASH_PERIOD` = 2.8 s at half strength |
 | brightness | RMS | slow sine cycle (period 10 s) around the mid level |
 | section transitions | detected boundaries | equal time windows |
@@ -1022,10 +1306,12 @@ code(r"""
 def baseline_controls(times):
     # Preset control signals with the same columns as the audio timeline, built ONLY from time.
     c = pd.DataFrame({"time_sec": times})
-    for name in ["bass", "mid", "high", "centroid"]:
+    for name in ["bass", "mid", "high", "centroid", "drums", "bass_stem", "other", "vocals", "lead"]:
         c[name] = BASELINE_LEVEL
     c["rms"] = BASELINE_LEVEL + 0.3 * np.sin(2 * np.pi * times / BASELINE_BRIGHT_PERIOD)
     c["beat_pulse"] = np.exp(-PULSE_DECAY * (times % BASELINE_PULSE_PERIOD))
+    c["drum_pulse"] = c["beat_pulse"]
+    c["drum_hits"] = np.floor(times / BASELINE_PULSE_PERIOD)
     c["onset_pulse"] = 0.5 * np.exp(-PULSE_DECAY * (times % BASELINE_FLASH_PERIOD))
     return c
 
@@ -1053,7 +1339,8 @@ shifted_render = None
 if RENDER_SHIFTED_CHECK:
     shift = int(BASELINE_SHIFT_SECONDS * FPS)
     shifted_ctrl = timeline.copy()
-    cols = ["rms", "bass", "mid", "high", "centroid", "beat_pulse", "onset_pulse"]
+    cols = ["rms", "bass", "mid", "high", "centroid", "beat_pulse", "onset_pulse",
+            "drums", "bass_stem", "other", "vocals", "lead", "drum_pulse", "drum_hits"]
     shifted_ctrl[cols] = np.roll(timeline[cols].values, shift, axis=0)
     shifted_params = visual_params(shifted_ctrl, section_edges)
     shifted_render = render_video(shifted_params, OUTPUT_DIR / "shifted_silent.mp4", section_images)
@@ -1073,7 +1360,7 @@ These are **implementation / alignment checks**, not proof that one video is bet
 not on the control parameters (e.g. `corr(RMS, brightness parameter)` would be ~1 by construction and says nothing).
 
 * **Visual motion energy:** `motion[t] = mean(|gray[t] − gray[t−1]|)` on 128×128 grayscale frames.
-* **Correlation** (Pearson and Spearman) of motion energy with RMS and with onset strength, for both videos.
+* **Correlation** (Pearson and Spearman) of motion energy with RMS, onset strength and the drum / bass stems, for both videos.
 * **Cross-correlation lag:** the lag at which onset strength and motion energy line up best. For a well-synchronized visualizer the
   peak should be near **0 ms**.
 * **QA:** beats map to pulses, crossfades sit on section boundaries, video length = audio length.
@@ -1105,8 +1392,10 @@ for name, (rend, params) in versions.items():
     m = rend.motion.values
     lags, cc = cross_corr_lag(timeline.onset.values[keep], m[keep])
     lag_curves[name] = (lags, cc)
-    for feature in ["rms", "onset"]:
+    for feature in ["rms", "onset", "drums", "bass_stem"]:
         x = timeline[feature].values
+        if np.std(x[keep]) == 0:                                     # absent stem: correlation undefined
+            continue
         metric_rows.append({"version": name, "feature": feature,
                             "pearson_r": scipy.stats.pearsonr(x[keep], m[keep])[0],
                             "spearman_rho": scipy.stats.spearmanr(x[keep], m[keep])[0],
@@ -1230,7 +1519,9 @@ a = metrics[(metrics.version == "audio-conditioned")].set_index("feature")
 b = metrics[(metrics.version == "baseline")].set_index("feature")
 print(f"Audio source: {AUDIO_SOURCE} | {DURATION:.1f} s | tempo estimate {tempo:.1f} BPM")
 print(f"Sections: {n_sections} ({SECTION_METHOD}) at {np.round(section_edges[1:-1], 2).tolist()} s")
-print(f"Images: {prompts.generated_by.unique().tolist()} | seed {RANDOM_SEED} | {GEN_STEPS} steps\n")
+print(f"Stems: {STEM_METHOD} | present: {[n for n in STEM_NAMES if stem_present[n]]} | drum hits: {len(drum_times)}")
+print(f"Vibe: {VIBE} ({VIBE_METHOD})")
+print(f"Images: {prompts.generated_by.unique().tolist()} | seeds {prompts.seed.tolist()} | {GEN_STEPS} steps\n")
 print("Motion energy vs audio (rendered frames, crossfades excluded):")
 for f in ["rms", "onset"]:
     print(f"  {f:>5}: audio-conditioned r = {a.loc[f, 'pearson_r']:+.2f} | baseline r = {b.loc[f, 'pearson_r']:+.2f}")
@@ -1240,6 +1531,11 @@ print(f"\nOutputs: {FINAL_VIDEO}, {BASELINE_VIDEO}")
 """)
 
 md(r"""
+**Confound to keep in mind:** the section images were generated from section statistics, so loud sections get busier artwork, and
+busier artwork produces more frame-to-frame change even under the baseline's preset motion. Correlations with **slow** features (RMS,
+stem levels) are therefore partly driven by *which image is on screen* in both videos. Correlation with **onset strength** (fast,
+moment-to-moment events) is the cleaner test of synchronization.
+
 **How to read this:** with strongly periodic music (the demo has 16th-note hi-hats every 125 ms) the cross-correlation curve
 is itself periodic, so the useful signal is that the *highest* peak sits at 0 ms and is clearly above the baseline curve. If the audio-conditioned version has clearly higher correlations and a cross-correlation peak near 0 ms while the
 baseline stays near zero, the *implementation* is aligned with the audio as designed. Whether viewers actually **perceive** better
@@ -1255,6 +1551,10 @@ synchronization is answered by the survey (section 17), not by these numbers.
 * **Sections are change regions**, not musical verses, choruses or drops.
 * **Wavelength-inspired mapping:** large forms for bass and fine detail for highs is a cross-modal design metaphor; the visuals do not
   physically represent acoustic wavelength.
+* **Stems are estimates.** Demucs separation leaks between stems, and "other" mixes every remaining instrument.
+* **The vibe is a coarse zero-shot guess** from five hand-written labels, not a validated mood classifier.
+* **Parts are found by radius**, which works because the prompts ask for a centred radial composition; arbitrary scenes
+  (e.g. a crowd) would need a segmentation model, and people are not animated.
 * **Prompt following is limited.** SD-Turbo is a small, few-step model; images reflect the descriptors only loosely, and the 77-token
   CLIP limit constrains prompt detail.
 * **Technical metrics test the implementation, not perception.** Motion energy is one crude output measure.
@@ -1265,6 +1565,8 @@ synchronization is answered by the survey (section 17), not by these numbers.
 
 * Run the identical notebook on one or two **real songs** (set `AUDIO_PATH`) to check that the pipeline is not clip-specific.
 * Use **image-to-image** generation from Section 1's image to make later section images even more coherent.
+* Replace radial parts with **segmentation masks** (e.g. Segment Anything) to animate arbitrary objects such as lights or silhouettes
+  in a themed scene.
 * Try a stronger model (SDXL-Turbo) if GPU memory allows, and compare prompt adherence.
 * Add the optional **time-shifted** comparison as a second baseline and an accessibility-focused evaluation.
 """)
