@@ -1,14 +1,20 @@
+# Python / Jupyter
 .venv/
 __pycache__/
 .ipynb_checkpoints/
 .DS_Store
-# Large/licensed media are not committed
-*.mp4
-!outputs/visualizer_audio.mp4
-!outputs/baseline_audio.mp4
+
+# Audio: only the license-free demo track is committed (songs are copyrighted, keep them local)
 *.wav
 *.mp3
 *.flac
-outputs/frames/
-outputs/**/stems/
-outputs/stems/
+!sample_inputs/demo_track.wav
+
+# Videos: only the demo videos are committed (song videos contain copyrighted audio)
+*.mp4
+!outputs/demo_track/videos/visualizer.mp4
+!outputs/demo_track/videos/baseline.mp4
+
+# Re-creatable intermediates and executed notebook copies (may contain lyric transcripts)
+outputs/*/cache/
+outputs/*/notebook_run.ipynb

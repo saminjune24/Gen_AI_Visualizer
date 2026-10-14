@@ -1,0 +1,6 @@
+time_sec,instrument,change
+0.5,other,enters
+7.62,drums,enters
+8.25,bass,enters
+24.33,bass,leaves
+29.83,drums,leaves
