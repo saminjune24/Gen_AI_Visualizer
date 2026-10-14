@@ -67,7 +67,10 @@ if IN_COLAB:
 
 code(r"""
 import json
+import os
+import re
 import subprocess
+import unicodedata
 import warnings
 from pathlib import Path
 
@@ -123,10 +126,20 @@ The visual coefficients in `VIS` are *tuning parameters* chosen by eye, not scie
 
 code(r"""
 # ---- Input / output ---------------------------------------------------------
-AUDIO_PATH    = None          # path to a .wav/.mp3/.flac; None = synthesize a demo track (section 4)
-CLIP_START    = 0.0           # seconds into the file where the clip starts
-CLIP_DURATION = 30.0          # seconds
-OUTPUT_DIR    = Path("outputs")
+# Set AUDIO_PATH to a .wav/.mp3/.flac file, or leave None to synthesize the demo track (section 4).
+# The environment variables let you render another song without editing the notebook, e.g.
+#   AUDIO_PATH="song.mp3" CLIP_START=28 jupyter nbconvert --execute ...
+AUDIO_PATH    = os.environ.get("AUDIO_PATH") or None
+CLIP_START    = float(os.environ.get("CLIP_START", 0.0))   # seconds into the file where the clip starts
+CLIP_DURATION = 30.0                                       # seconds
+
+# Each song gets its own output folder (the demo track writes to outputs/ directly).
+def slugify(text):
+    ascii_text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "_", ascii_text.lower()).strip("_")
+
+RUN_NAME   = "demo" if AUDIO_PATH is None else slugify(Path(AUDIO_PATH).stem)
+OUTPUT_DIR = Path("outputs") if AUDIO_PATH is None else Path("outputs") / RUN_NAME
 
 # ---- Audio analysis -----------------------------------------------------------
 SR         = 22050            # sample rate (Hz)
@@ -274,7 +287,8 @@ DURATION = len(y) / SR
 AUDIO_WAV = OUTPUT_DIR / "audio_clip.wav"
 sf.write(AUDIO_WAV, y, SR)                       # exact audio that will be muxed into the videos
 
-print(f"Source: {AUDIO_SOURCE}")
+print(f"Source: {AUDIO_SOURCE}" + (f" (clip {CLIP_START:.1f}-{CLIP_START + DURATION:.1f} s)" if AUDIO_PATH else ""))
+print(f"Outputs: {OUTPUT_DIR}/")
 print(f"Samples: {len(y):,} | sample rate: {SR} Hz | duration: {DURATION:.2f} s")
 assert abs(DURATION - CLIP_DURATION) < 0.5, "Clip is shorter than CLIP_DURATION; check AUDIO_PATH / CLIP_START"
 """)

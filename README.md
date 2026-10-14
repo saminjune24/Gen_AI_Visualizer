@@ -52,8 +52,16 @@ python3.13 -m venv .venv
 * The section images are committed, so re-running the notebook **does not regenerate them** unless the prompts change or
   `FORCE_REGENERATE = True`.
 * A full run takes about 1.5 minutes on an Apple-silicon laptop when images are cached.
-* To use your own song, set `AUDIO_PATH` (and optionally `CLIP_START`) in the configuration cell. Audio and video files are
-  git-ignored.
+* To use your own song, set `AUDIO_PATH` (and optionally `CLIP_START`) in the configuration cell, or pass them as environment
+  variables without editing the notebook:
+
+  ```bash
+  AUDIO_PATH="$HOME/Downloads/song.mp3" CLIP_START=28 .venv/bin/jupyter nbconvert --to notebook --execute \
+      genai_audio_visualizer.ipynb --output-dir outputs/my_song --output notebook_run
+  ```
+
+  Each song writes to its own folder, `outputs/<song_name>/` (videos, images, prompts, metrics, figures). Song audio and
+  song videos are git-ignored.
 
 ## Run on Google Colab
 
