@@ -9,6 +9,14 @@ baseline** that uses the same images and effects.
 **Research question:** can audio-derived features guide generative artwork and procedural animation to produce a visualization that
 feels more synchronized and connected to the music than a non-audio-conditioned visualizer?
 
+## Watch the result
+
+* **[outputs/visualizer_audio.mp4](outputs/visualizer_audio.mp4)**: final audio-synced visualizer (with sound)
+* **[outputs/baseline_audio.mp4](outputs/baseline_audio.mp4)**: non-audio-conditioned baseline (same song, same images)
+
+On GitHub, open the file and click **View raw** (or download it) to play it with sound. The current videos use the synthesized
+30 s demo track; set `AUDIO_PATH` to render the same pipeline on a real song.
+
 ## Pipeline
 
 ```
@@ -61,7 +69,8 @@ Upload the notebook, choose **Runtime → Change runtime type → T4 GPU**, and 
 | `metrics.csv` | yes | correlations and lag for both videos |
 | `figures/*.png` | yes | diagnostic plots |
 | `survey_template.csv` | yes | empty survey response sheet |
-| `visualizer_audio.mp4`, `baseline_audio.mp4` | no | final videos with audio (regenerate by running the notebook) |
+| `visualizer_audio.mp4`, `baseline_audio.mp4` | yes | final videos **with the song** |
+| `audio_clip.wav`, `preview.mp4` | no | intermediate files |
 
 ## Notes on wording
 

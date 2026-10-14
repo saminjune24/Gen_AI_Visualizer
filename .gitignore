@@ -4,6 +4,8 @@ __pycache__/
 .DS_Store
 # Large/licensed media are not committed
 *.mp4
+!outputs/visualizer_audio.mp4
+!outputs/baseline_audio.mp4
 *.wav
 *.mp3
 *.flac

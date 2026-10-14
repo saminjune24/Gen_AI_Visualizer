@@ -899,6 +899,22 @@ def render_frame(p, frame_idx, images):
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 
 
+def mux_audio(video_path, audio_path, out_path):
+    cmd = [FFMPEG, "-y", "-loglevel", "error", "-i", str(video_path), "-i", str(audio_path),
+           "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
+           "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",   # standard stereo audio plays everywhere
+           "-shortest", "-movflags", "+faststart", str(out_path)]
+    subprocess.run(cmd, check=True)
+    Path(video_path).unlink()            # remove the silent intermediate so only the video WITH sound remains
+    return out_path
+
+def media_info(path):
+    # Returns (video seconds, has audio stream) using the bundled ffmpeg.
+    n_frames, secs = imageio_ffmpeg.count_frames_and_secs(str(path))
+    probe = subprocess.run([FFMPEG, "-hide_banner", "-i", str(path)], capture_output=True, text=True).stderr
+    return n_frames, secs, "Audio:" in probe
+
+
 def render_video(params, path, images, seconds=None):
     # Render frames (by timestamp) to a silent H.264 MP4; return per-frame motion energy and mean luminance.
     rows = params if seconds is None else params[params.time_sec < seconds]
@@ -919,13 +935,14 @@ def render_video(params, path, images, seconds=None):
 """)
 
 md(r"""
-### 13.1 Quick preview (first `PREVIEW_SECONDS` seconds, silent)
+### 13.1 Quick preview (first `PREVIEW_SECONDS` seconds, with sound)
 A short render to check the look before committing to the full video.
 """)
 
 code(r"""
-preview_path = OUTPUT_DIR / "preview_silent.mp4"
-_ = render_video(audio_params, preview_path, section_images, seconds=PREVIEW_SECONDS)
+preview_path = OUTPUT_DIR / "preview.mp4"
+_ = render_video(audio_params, OUTPUT_DIR / "preview_silent.mp4", section_images, seconds=PREVIEW_SECONDS)
+mux_audio(OUTPUT_DIR / "preview_silent.mp4", AUDIO_WAV, preview_path)
 
 # Contact sheet: one frame every second of the preview
 sample_frames = [render_frame(p, i, section_images)
@@ -954,22 +971,11 @@ md(r"""
 ## 14. Mux the original audio into the final MP4
 
 The silent video and `outputs/audio_clip.wav` are combined with the FFmpeg CLI. The video stream is copied unchanged (`-c:v copy`) and the
-audio is encoded as AAC. Durations are then checked to rule out audio/video drift.
+audio is encoded as 44.1 kHz stereo AAC. The silent intermediate file is then deleted, so **`outputs/visualizer_audio.mp4` is the final
+video with the song**. Durations are checked to rule out audio/video drift.
 """)
 
 code(r"""
-def mux_audio(video_path, audio_path, out_path):
-    cmd = [FFMPEG, "-y", "-loglevel", "error", "-i", str(video_path), "-i", str(audio_path),
-           "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", str(out_path)]
-    subprocess.run(cmd, check=True)
-    return out_path
-
-def media_info(path):
-    # Returns (video seconds, has audio stream) using the bundled ffmpeg.
-    n_frames, secs = imageio_ffmpeg.count_frames_and_secs(str(path))
-    probe = subprocess.run([FFMPEG, "-hide_banner", "-i", str(path)], capture_output=True, text=True).stderr
-    return n_frames, secs, "Audio:" in probe
-
 FINAL_VIDEO = mux_audio(audio_silent, AUDIO_WAV, OUTPUT_DIR / "visualizer_audio.mp4")
 n_frames_out, secs_out, has_audio = media_info(FINAL_VIDEO)
 print(f"{FINAL_VIDEO}: {n_frames_out} frames, {secs_out:.2f} s, audio stream: {has_audio}")
