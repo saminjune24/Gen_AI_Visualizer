@@ -178,6 +178,13 @@ MIN_SECTION_SEC = 4.5         # minimum section length; also the minimum spacing
 ACTIVITY_WEIGHTS = {"rms": 0.50, "onset": 0.30, "bass": 0.20}
 ACTIVITY_SMOOTH_SEC = 1.0     # extra smoothing before looking for change points
 
+# ---- Dramatic beat changes (section 9.3) ----------------------------------------------------
+DRAMATIC_WINDOW_SEC = 3.0     # compare this many seconds before vs after each section boundary
+DRAMATIC_WEIGHTS    = {"drums": 1.0, "drum_hits": 1.0, "bass": 1.0, "tempo": 0.5}   # tempo is noisy -> half weight
+DRAMATIC_THRESHOLD  = 0.50    # largest weighted change at or above this -> completely new image and shape
+DRAMATIC_CROSSFADE  = 0.25    # seconds: near-cut instead of the normal CROSSFADE_SECONDS blend
+DRAMATIC_FLASH      = 0.35    # extra white flash at a dramatic change (audio-conditioned version only)
+
 # ---- Image generation ---------------------------------------------------------------
 MODEL_ID        = "stabilityai/sd-turbo"
 IMAGE_SIZE      = 512         # SD-Turbo's native resolution
@@ -1012,6 +1019,130 @@ signature
 """)
 
 # =============================================================================
+# 9.3 Dramatic beat changes
+# =============================================================================
+md(r"""
+## 9.3 Detect dramatic beat changes → completely new image
+
+Normally each section's image is generated *from the previous section's image* (img2img, section 11), so the artwork evolves smoothly.
+When the **beat changes dramatically** (a drop, the drums cutting out, a switch to half-time) the video should change completely instead.
+
+For every section boundary, the notebook compares the `DRAMATIC_WINDOW_SEC` = 3 s **before** with the 3 s **after**:
+
+| Change | Measured as | Weight |
+|---|---|---|
+| drum level | difference in mean drum-stem level (0–1) | 1.0 |
+| drum-hit rate | relative difference in drum hits per second | 1.0 |
+| bass level | difference in mean bass-stem level (0–1) | 1.0 |
+| local tempo | \|log2(tempo after / tempo before)\|, capped at 1 (= half or double time) | 0.5 (tempo estimates on 3 s are noisy) |
+
+The **change score is the largest weighted change**, not the sum: a drop where only the kick and bass disappear is dramatic even if the
+hi-hats keep the same hit rate, and averaging would dilute it. If the **change score ≥ `DRAMATIC_THRESHOLD`** (0.50), that section:
+
+1. **restarts the image chain:** generated from text with a fresh seed, not from the previous image;
+2. gets a **completely different shape family**, chosen from the new section's own rhythm:
+
+| New section's rhythm | Shape family |
+|---|---|
+| heavy drums + many hits | concentric hexagon **tunnel** |
+| heavy drums, fewer hits | radiating **sunburst** of light rays |
+| light drums, bright highs | faceted **crystal** geode |
+| light drums, strong mids | spiral **vortex** galaxy |
+| otherwise | blooming **flower** |
+
+   (if that equals the current shape, the next family in the list is used, so the shape always changes);
+3. **cuts** to the new image in `DRAMATIC_CROSSFADE` = 0.25 s with a flash, instead of the 1 s crossfade.
+
+All families stay centred and radial, so the part-by-part animation keeps working. Weights and threshold are design choices, checked
+on the synthesized demo track, where the true changes are known (kick + bass enter at 8 s and drop out at 24 s; hi-hats join at 16 s).
+""")
+
+code(r"""
+local_tempo = librosa.feature.tempo(onset_envelope=onset_env, sr=SR, hop_length=HOP_LENGTH, aggregate=None)
+
+def window_mean(values, times, a, b):
+    m = (times >= a) & (times < b)
+    return float(values[m].mean()) if m.any() else 0.0
+
+def hit_rate(a, b):
+    return np.sum((drum_times >= a) & (drum_times < b)) / max(b - a, 1e-9)
+
+FAMILY_ORDER = ["tunnel", "sunburst", "crystal", "vortex", "flower"]
+SHAPE_FAMILIES = {
+    "star":     f"{N_POINTS}-pointed star inside a larger star, {LAYOUT}",      # the song-level shape (section 9.2)
+    "tunnel":   "concentric hexagon tunnel receding to a bright center",
+    "sunburst": "radiating sunburst of long light rays",
+    "crystal":  "faceted crystal geode with a glowing core",
+    "vortex":   "spiral vortex galaxy swirling into a bright center",
+    "flower":   "blooming flower with layered petals",
+}
+
+def pick_family(sec_id, avoid):
+    # Shape family from the new section's own rhythm; never the same as the current one.
+    part = timeline[timeline.section_id == sec_id]
+    row = sections[sections.section == sec_id].iloc[0]
+    drums = part.drums.mean()
+    if drums >= 0.5 and row.onset_density_rel >= 0.6:
+        family = "tunnel"
+    elif drums >= 0.5:
+        family = "sunburst"
+    elif row.high >= 0.6:
+        family = "crystal"
+    elif row.mid >= 0.5:
+        family = "vortex"
+    else:
+        family = "flower"
+    if family == avoid:
+        family = FAMILY_ORDER[(FAMILY_ORDER.index(family) + 1) % len(FAMILY_ORDER)]
+    return family
+
+W, wd = DRAMATIC_WINDOW_SEC, DRAMATIC_WEIGHTS
+change_rows, current = [], "star"
+plan = {1: {"family": "star", "new_image": True}}
+for k, b in enumerate(section_edges[1:-1], start=2):          # boundary before section k
+    before, after = (max(0.0, b - W), b), (b, min(DURATION, b + W))
+    d_drums = abs(window_mean(timeline.drums.values, frame_times, *after) - window_mean(timeline.drums.values, frame_times, *before))
+    r0, r1 = hit_rate(*before), hit_rate(*after)
+    d_hits = abs(r1 - r0) / max(r0, r1, 1e-9)
+    d_bass = abs(window_mean(timeline.bass_stem.values, frame_times, *after)
+                 - window_mean(timeline.bass_stem.values, frame_times, *before))
+    t0 = np.median(local_tempo[(feat_times >= before[0]) & (feat_times < before[1])])
+    t1 = np.median(local_tempo[(feat_times >= after[0]) & (feat_times < after[1])])
+    d_tempo = min(1.0, abs(np.log2(t1 / t0)))
+    score = max(wd["drums"] * d_drums, wd["drum_hits"] * d_hits, wd["bass"] * d_bass, wd["tempo"] * d_tempo)
+    dramatic = score >= DRAMATIC_THRESHOLD
+    if dramatic:
+        current = pick_family(k, avoid=current)
+    plan[k] = {"family": current, "new_image": dramatic}
+    change_rows.append({"boundary_sec": round(b, 2), "into_section": k, "d_drums": d_drums, "d_drum_hits": d_hits,
+                        "d_bass": d_bass, "tempo_before": t0, "tempo_after": t1, "change_score": score,
+                        "dramatic": dramatic, "shape_after": current})
+
+beat_changes = pd.DataFrame(change_rows)
+DRAMATIC_BOUNDARIES = beat_changes.loc[beat_changes.dramatic, "boundary_sec"].to_numpy(float)
+section_crossfades = np.where(beat_changes.dramatic, DRAMATIC_CROSSFADE, CROSSFADE_SECONDS) if len(beat_changes) else []
+beat_changes.to_csv(OUTPUT_DIR / "beat_changes.csv", index=False)
+print(f"Dramatic beat changes at {DRAMATIC_BOUNDARIES.tolist()} s (threshold {DRAMATIC_THRESHOLD})")
+beat_changes.round(2)
+""")
+
+code(r"""
+fig, ax = plt.subplots(figsize=(12, 3.2))
+ax.plot(frame_times, timeline.drums, color=COLORS["drums"], lw=1.0, label="drum stem level")
+ax.plot(frame_times, timeline.bass_stem, color=COLORS["bass_stem"], lw=1.0, label="bass stem level")
+ax.vlines(drum_times, 0, 0.08, color=COLORS["beat"], lw=0.6, label="drum hits")
+for _, r in beat_changes.iterrows():
+    style = dict(color=COLORS["baseline"], lw=2.2, ls="-") if r.dramatic else dict(color="#52514e", lw=1.0, ls="--")
+    ax.axvline(r.boundary_sec, **style)
+    ax.text(r.boundary_sec + 0.15, 1.02, f"{r.change_score:.2f}" + (f" → {r.shape_after}" if r.dramatic else ""),
+            fontsize=9, color=style["color"])
+ax.set(title="Section boundaries: solid red = dramatic beat change (new image + new shape), dashed = smooth evolution",
+       xlabel="time (s)", ylabel="level (0-1)", xlim=(0, DURATION), ylim=(0, 1.12))
+ax.legend(loc="upper left", fontsize=8, ncol=3)
+plt.tight_layout(); plt.savefig(FIG_DIR / "beat_changes.png"); plt.show()
+""")
+
+# =============================================================================
 # 10. Prompts
 # =============================================================================
 md(r"""
@@ -1023,8 +1154,8 @@ The diffusion model never sees the waveform. Instead each section goes through a
 
 Every prompt has three parts:
 
-1. **Song structure** (same for all sections of a song, from section 9.2): a centred *N-pointed star inside a larger star* with the
-   song's layout, form and materials. A centred, layered radial structure is required because the renderer (section 13) animates the
+1. **Structure:** the section's **shape family** (section 9.3: the song's *N-pointed star* until a dramatic beat change switches it to a
+   tunnel, sunburst, crystal, vortex or flower) plus the song's form and materials (section 9.2). A centred, layered radial structure is required because the renderer (section 13) animates the
    image **part by part by radius** (core, inner star, outer star).
 2. **Vibe theme** (same for all sections, from section 9.1): colours and lighting, e.g. *neon club lights* for party.
 3. **Section descriptors** (different per section): one short phrase each for energy, bass, mid and high-frequency content.
@@ -1047,7 +1178,10 @@ def level(x):
     return "low" if x < 1 / 3 else ("medium" if x < 2 / 3 else "high")
 
 # 1. Song structure shared by every section (the renderer animates these parts)
-STRUCTURE = f"luminous digital art, centered radial composition, {SHAPE_TEXT}, made of {MATERIAL_TEXT}, dark background"
+def structure(section):
+    # Shape family for this section (section 9.3) + the song's form and materials (section 9.2)
+    shape = SHAPE_FAMILIES[plan[section]["family"]]
+    return f"luminous digital art, centered radial composition, {shape}, {FORM}, made of {MATERIAL_TEXT}, dark background"
 
 # 2. Vibe theme shared by every section
 VIBE_THEMES = {
@@ -1075,7 +1209,7 @@ PROMPT_FEATURES = ["rms", "bass", "mid", "high"]                                
 def build_prompt(row):
     levels = {f: level(row[f]) for f in LEVEL_FEATURES}
     phrases = [DESCRIPTORS[f][levels[f]] for f in PROMPT_FEATURES]
-    prompt = ", ".join([STRUCTURE, VIBE_THEMES[VIBE]] + phrases)
+    prompt = ", ".join([structure(int(row.section)), VIBE_THEMES[VIBE]] + phrases)
     description = (f"A {VIBE} song. This section has {levels['rms']} energy with {levels['bass']} low-frequency presence, "
                    f"{levels['mid']} mid-frequency activity, {levels['high']} high-frequency detail, "
                    f"{levels['centroid']} spectral brightness and {levels['onset_density_rel']} onset density.")
@@ -1085,8 +1219,9 @@ records = []
 for _, row in sections.iterrows():
     prompt, description, levels = build_prompt(row)
     s = int(row.section)
-    first = s == 1
-    records.append({"section": s, "vibe": VIBE, **{f"{k}_level": v for k, v in levels.items()},
+    first = plan[s]["new_image"]                  # section 1, or a dramatic beat change -> start a new image
+    records.append({"section": s, "vibe": VIBE, "shape_family": plan[s]["family"],
+                    **{f"{k}_level": v for k, v in levels.items()},
                     "section_description": description, "prompt": prompt,
                     "seed": SONG_SEED + s, "model": MODEL_ID, "guidance_scale": 0.0,
                     "mode": "text2img" if first else "img2img",
@@ -1111,7 +1246,7 @@ try:
 except OSError as e:
     print("Tokenizer not available offline, skipping token check:", e)
 
-prompts[["section", "vibe", "rms_level", "bass_level", "mid_level", "high_level", "centroid_level", "onset_density_rel_level"]]
+prompts[["section", "vibe", "shape_family", "rms_level", "bass_level", "mid_level", "high_level", "centroid_level", "onset_density_rel_level"]]
 """)
 
 # =============================================================================
@@ -1124,8 +1259,9 @@ Model: **[SD-Turbo](https://huggingface.co/stabilityai/sd-turbo)** (distilled fr
 It is light enough for a free Colab T4 or an Apple-silicon laptop. Before publishing results, check the model card's license terms
 (SD-Turbo is released under the Stability AI community license).
 
-**Image-to-image chaining:** Section 1 is generated from text alone. Each later section starts from the **previous section's image**
-(img2img, `strength = IMG2IMG_STRENGTH` = 0.6) with its own prompt, so the song's images read as one evolving artwork: the composition
+**Image-to-image chaining:** Section 1, and any section that follows a **dramatic beat change** (section 9.3), is generated from text
+alone, with a new shape family. Every other section starts from the **previous section's image** (img2img,
+`strength = IMG2IMG_STRENGTH` = 0.6) with its own prompt, so between dramatic changes the artwork evolves smoothly: the composition
 carries over while energy, bass and detail change with the music.
 
 **Caching:** each image is saved to `outputs/images/section_N.png` together with `outputs/prompts.csv`. On later runs an image is only
@@ -1207,8 +1343,8 @@ section_images = [np.asarray(Image.open(p).convert("RGB").resize((OUTPUT_SIZE, O
 fig, axes = plt.subplots(1, n_sections, figsize=(4 * n_sections, 4.4))
 for ax, img, (_, r) in zip(axes, section_images, prompts.iterrows()):
     ax.imshow(img); ax.axis("off")
-    ax.set_title(f"Section {r.section} ({r['mode']})\nenergy {r.rms_level} · bass {r.bass_level} · high {r.high_level}",
-                 fontsize=10)
+    ax.set_title(f"Section {r.section}: {r.shape_family} ({r['mode']})\nenergy {r.rms_level} · bass {r.bass_level} · "
+                 f"high {r.high_level}", fontsize=10)
 plt.tight_layout(); plt.savefig(FIG_DIR / "section_images.png"); plt.show()
 """)
 
@@ -1294,30 +1430,31 @@ details follow high frequencies (the wavelength-inspired grammar from section 10
 | Brightness / saturation | RMS | overall intensity | `brightness = 0.70 + 0.25·rms` |
 | Sharpness | spectral centroid | crisper when brighter | `sharpness = 0.90 + 0.30·centroid` |
 | White flash | onsets | brief flash | `flash = 0.12·onset_pulse` |
-| Section image | section id | crossfade | over `CROSSFADE_SECONDS` around each boundary |
+| Section image | section id, dramatic beat change | crossfade / cut | 1 s crossfade; **0.25 s cut + flash** at a dramatic beat change |
 
 Rotation angles are integrated over time (`cumsum(speed) / FPS`) so speed changes never cause jumps. Both the audio-conditioned version
 and the baseline produce a **parameter table with identical columns**, and one renderer draws both.
 """)
 
 code(r"""
-def crossfade_plan(times, edges, crossfade=CROSSFADE_SECONDS):
+def crossfade_plan(times, edges, crossfades=CROSSFADE_SECONDS):
     # For each frame: index of image A, index of image B and blend weight (0 = all A, 1 = all B).
+    # `crossfades` is one duration for every boundary, or one per boundary.
     sec = np.clip(np.searchsorted(edges, times, side="right") - 1, 0, len(edges) - 2)
     img_a, img_b, blend = sec.copy(), sec.copy(), np.zeros_like(times)
-    for k, b in enumerate(edges[1:-1]):            # boundary k separates image k and k+1
+    for k, (b, crossfade) in enumerate(zip(edges[1:-1], np.broadcast_to(crossfades, len(edges) - 2))):
         in_fade = np.abs(times - b) < crossfade / 2
         img_a[in_fade], img_b[in_fade] = k, k + 1
         blend[in_fade] = (times[in_fade] - (b - crossfade / 2)) / crossfade
     return img_a, img_b, blend
 
 
-def visual_params(ctrl, edges):
+def visual_params(ctrl, edges, crossfades=CROSSFADE_SECONDS, flash_times=()):
     # ctrl: DataFrame of controls (all 0-1 except drum_hits). Returns one row of visual parameters per frame.
     v, t = VIS, ctrl.time_sec.values
     deg_per_frame = lambda speed: np.cumsum(speed) / FPS           # integrate deg/s -> degrees
     p = pd.DataFrame({"time_sec": t})
-    p["img_a"], p["img_b"], p["blend"] = crossfade_plan(t, edges)
+    p["img_a"], p["img_b"], p["blend"] = crossfade_plan(t, edges, crossfades)
     p["zoom"] = v["zoom_base"] + v["zoom_bass"] * ctrl.bass.values
     p["core_scale"] = 1 + v["core_scale_bass"] * ctrl.bass_stem.values + v["core_scale_beat"] * ctrl.beat_pulse.values
     p["core_angle"] = deg_per_frame(np.full(len(t), v["core_rot_base"]))
@@ -1337,9 +1474,11 @@ def visual_params(ctrl, edges):
     p["saturation"] = v["saturation_base"] + v["saturation_rms"] * ctrl.rms.values
     p["sharpness"] = v["sharpness_base"] + v["sharpness_centroid"] * ctrl.centroid.values
     p["flash"] = v["flash_onset"] * ctrl.onset_pulse.values
+    for ft in flash_times:                                           # extra flash at dramatic beat changes
+        p["flash"] += DRAMATIC_FLASH * np.where(t >= ft, np.exp(-PULSE_DECAY * (t - ft)), 0.0)
     return p
 
-audio_params = visual_params(timeline, section_edges)
+audio_params = visual_params(timeline, section_edges, crossfades=section_crossfades, flash_times=DRAMATIC_BOUNDARIES)
 audio_params.describe().T[["mean", "min", "max"]].round(3)
 """)
 
@@ -1531,7 +1670,7 @@ difference is where the control signals come from: preset procedural rules that 
 | light colour changes | on every drum hit | on every preset pulse |
 | onset flash | onset events × strength | fixed flash every `BASELINE_FLASH_PERIOD` = 2.8 s at half strength |
 | brightness | RMS | slow sine cycle (period 10 s) around the mid level |
-| section transitions | detected boundaries | equal time windows |
+| section transitions | detected boundaries; 0.25 s cut + flash at dramatic beat changes | equal time windows, always the 1 s crossfade |
 
 The baseline is meant to look polished, not deliberately bad: it simply removes the audio-conditioning mechanism.
 """)
@@ -1755,7 +1894,8 @@ print(f"Audio source: {AUDIO_SOURCE} | {DURATION:.1f} s | tempo estimate {tempo:
 print(f"Sections: {n_sections} ({SECTION_METHOD}) at {np.round(section_edges[1:-1], 2).tolist()} s")
 print(f"Stems: {STEM_METHOD} | present: {[n for n in STEM_NAMES if stem_present[n]]} | drum hits: {len(drum_times)}")
 print(f"Vibe: {VIBE} ({VIBE_METHOD}) | key {KEY} | lyrics: {LYRICS_NOTE}")
-print(f"Shape: {SHAPE_TEXT} | materials: {MATERIAL_TEXT}")
+print(f"Shapes per section: {prompts.shape_family.tolist()} | dramatic beat changes at {DRAMATIC_BOUNDARIES.tolist()} s")
+print(f"Materials: {MATERIAL_TEXT}")
 print(f"Images: {prompts.generated_by.unique().tolist()} | seeds {prompts.seed.tolist()} | {GEN_STEPS} steps\n")
 print("Motion energy vs audio (rendered frames, crossfades excluded):")
 for f in ["rms", "onset"]:
@@ -1791,6 +1931,8 @@ synchronization is answered by the survey (section 17), not by these numbers.
   the feature scalings (e.g. 80–125 BPM) are assumptions. Beat trackers can report half or double tempo, and loudness depends on
   mastering. Close scores mean the choice is nearly arbitrary, which is why `VIBE_OVERRIDE` exists.
 * **Lyrics** come from automatic transcription of a separated vocal stem and can be wrong; binary sentiment misses irony and nuance.
+* **Dramatic changes are only checked at detected section boundaries**, with hand-set weights and threshold; a beat change in the
+  middle of a section is not caught, and local tempo estimates over 3 s windows are noisy (hence their low weight).
 * **Shape rules are design metaphors** (tempo → number of points, minor key → shards); the key estimate can be wrong for songs with
   modulations or ambiguous harmony.
 * **Parts are found by radius**, which works because the prompts ask for a centred radial composition; arbitrary scenes
