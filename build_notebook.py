@@ -163,8 +163,13 @@ DEMUCS_MODEL    = "htdemucs"  # pretrained source-separation model: drums / bass
 STEM_PRESENCE   = 0.15        # a stem counts as "present" if its loud level is >= 15% of the full mix
 
 # ---- Vibe (section 9.1) ------------------------------------------------------------------
-CLAP_MODEL    = "laion/clap-htsat-unfused"
-VIBE_OVERRIDE = os.environ.get("VIBE_OVERRIDE") or None   # e.g. "dark" to force a vibe; None = detect it
+CLAP_MODEL      = "laion/clap-htsat-unfused"
+VIBE_WEIGHTS    = {"acoustic": 0.5, "clap": 0.5}   # how the two audio opinions are combined
+LYRICS_ANALYSIS = True        # transcribe the vocal stem + sentiment (only if the song has vocals)
+WHISPER_MODEL   = "openai/whisper-small"
+SENTIMENT_MODEL = "cardiffnlp/twitter-roberta-base-sentiment-latest"   # positive / neutral / negative
+BITTERSWEET_NEGATIVITY = 0.50 # upbeat audio + lyrics mostly negative (top class and >= 50%) -> "bittersweet"
+VIBE_OVERRIDE   = os.environ.get("VIBE_OVERRIDE") or None   # e.g. "dark" to force a vibe; None = detect it
 DRIVE_THRESHOLD = 0.35        # drum share of stem energy above which the layout becomes "tunnel rings" (section 9.2)
 
 # ---- Sections -------------------------------------------------------------------
@@ -740,28 +745,100 @@ sections.round(2)
 # 9.1 Vibe
 # =============================================================================
 md(r"""
-## 9.1 Detect the vibe (CLAP)
+## 9.1 Classify the vibe
 
-**[CLAP](https://huggingface.co/laion/clap-htsat-unfused)** (Contrastive Language-Audio Pretraining) is a pretrained model that embeds audio
-and text in the same space, so it can score how well the clip matches each text label without any training (**zero-shot**).
-The clip is cut into 10-second windows (CLAP's training length), each window is scored against two groups of descriptions, and the
-probabilities are averaged per group:
+Vibe classification is a Music Information Retrieval (MIR) problem. The notebook combines three independent opinions, following the usual
+*audio engineer → data scientist → model* pipeline. Vibes: **party, happy, chill, melancholic, dark, epic** (+ **bittersweet**, see C).
 
-* **Vibe** (party / calm / dark / dreamy / epic) → sets the **theme and palette** shared by every section prompt.
-* **Instruments / textures** (electric guitar, piano, synthesizer, strings, …) → used in section 9.2 to pick the **materials** the
-  shapes are made of.
+**A. Acoustic profile (the audio engineer's lens, fully interpretable).** Seven measurements, each mapped to [0, 1]:
 
-This is a genre-level guess, not a validated mood classifier. If CLAP cannot be loaded, a simple rule based on tempo, onset rate and
-brightness is used instead. Set `VIBE_OVERRIDE` in the config to force a vibe.
+| Feature | Measured as | Why it matters |
+|---|---|---|
+| `tempo` | beat-tracker BPM: 80 → 0, 125 → 1 | party sits around 120–130 BPM; chill / melancholic around 60–90 |
+| `transients` | drum share of the Demucs stems + onset rate | party songs have hard, frequent hits; chill songs soft attacks |
+| `compression` | 1 − dynamic range (95th − 10th percentile of frame loudness, 6 dB → 1, 24 dB → 0) | party mixes are heavily compressed; melancholic ones breathe |
+| `brightness` | spectral centroid (1–3.5 kHz) and 85 % roll-off (2.5–7.5 kHz) | bright mixes read happy / energetic; rolled-off highs read dark / sad |
+| `major` | Krumhansl–Schmuckler key estimate on chroma (drums removed): major vs minor correlation | major ≈ upbeat, minor ≈ tension / sadness |
+| `energy` | mean loudness, −30 dBFS → 0, −10 dBFS → 1 | overall intensity |
+| `noisiness` | spectral flatness (log scale) | distortion and noise read aggressive / dark |
+
+Each vibe has a hand-written **prototype** (its expected value for every feature, table below). The acoustic score for a vibe is
+`exp(−distance² / 2σ²)` between the song's profile and that prototype, normalized over vibes. These are design rules, not learned weights.
+
+**B. Pretrained audio embedding (transfer learning).** CLAP, a model pretrained on hundreds of thousands of audio–text pairs, scores the
+clip against a text description of each vibe (zero-shot), averaged over 10-second windows. It also scores instrument / texture tags used
+for materials in section 9.2. The per-window scores show how the vibe **changes over time**.
+
+**C. Lyrics (multi-modal).** If the song has vocals, the separated vocal stem is transcribed with Whisper and the text is scored by a
+3-class sentiment model (positive / neutral / negative). If the audio says *party / happy* but **negative** is the most likely lyric class
+(and ≥ `BITTERSWEET_NEGATIVITY` = 50 %), the song is classified **bittersweet**.
+
+**Final vibe** = `0.5 × acoustic + 0.5 × CLAP`, then the bittersweet rule. `VIBE_OVERRIDE` forces a vibe.
+
+**What is *not* done here:** training or fine-tuning a CNN on mel-spectrograms, an LSTM over time, or a YAMNet/VGGish classifier head.
+All of those need a dataset of songs **labelled by vibe**, which this project does not have; CLAP is used as the pretrained-model stand-in.
 """)
 
 code(r"""
-VIBES = {   # vibe -> text description CLAP compares the audio against
-    "party":  "energetic party dance music",
-    "calm":   "calm relaxing ambient music",
-    "dark":   "dark intense aggressive music",
-    "dreamy": "dreamy emotional melancholic music",
-    "epic":   "epic cinematic orchestral music",
+VIBE_NAMES = ["party", "happy", "chill", "melancholic", "dark", "epic"]
+
+# ---- A. Acoustic profile ------------------------------------------------------------
+PITCHES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+KS_MAJOR = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
+KS_MINOR = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
+chroma_mean = librosa.feature.chroma_cqt(y=y - stems["drums"], sr=SR, hop_length=HOP_LENGTH).mean(axis=1)
+best = {mode: max((np.corrcoef(chroma_mean, np.roll(prof, k))[0, 1], k) for k in range(12))
+        for mode, prof in (("major", KS_MAJOR), ("minor", KS_MINOR))}
+MODE = max(best, key=lambda m: best[m][0])
+key_corr, key_idx = best[MODE]
+KEY = f"{PITCHES[key_idx]} {MODE}"
+
+def scale(x, lo, hi):
+    return float(np.clip((x - lo) / (hi - lo), 0, 1))
+
+rms_db = librosa.amplitude_to_db(rms, ref=1.0)
+rolloff = librosa.feature.spectral_rolloff(y=y, sr=SR, n_fft=N_FFT, hop_length=HOP_LENGTH, roll_percent=0.85)[0]
+flatness = librosa.feature.spectral_flatness(y=y, n_fft=N_FFT, hop_length=HOP_LENGTH)[0]
+stem_means = {n: float(np.mean(stem_rms[n])) for n in STEM_NAMES if stem_present[n]}
+DRUM_SHARE = stem_means.get("drums", 0.0) / (sum(stem_means.values()) or 1.0)
+dynamic_range_db = np.percentile(rms_db, 95) - np.percentile(rms_db, 10)
+
+profile = {
+    "tempo":       scale(tempo, 80, 125),
+    "transients":  0.5 * scale(DRUM_SHARE, 0.0, 0.5) + 0.5 * scale(len(onset_times) / DURATION, 0, 6),
+    "compression": 1 - scale(dynamic_range_db, 6, 24),
+    "brightness":  0.5 * scale(centroid.mean(), 1000, 3500) + 0.5 * scale(rolloff.mean(), 2500, 7500),
+    "major":       scale(best["major"][0] - best["minor"][0], -0.2, 0.2),
+    "energy":      scale(rms_db.mean(), -30, -10),
+    "noisiness":   scale(np.log10(flatness.mean() + 1e-9), -3, -1),
+}
+FEATURE_NAMES = list(profile)
+
+# Expected feature values for each vibe (design prototypes, one row per vibe, columns = FEATURE_NAMES)
+PROTOTYPES = pd.DataFrame({
+    #               tempo transients compression brightness major energy noisiness
+    "party":       [0.95, 0.90, 0.90, 0.75, 0.60, 0.90, 0.50],
+    "happy":       [0.65, 0.55, 0.60, 0.80, 0.90, 0.60, 0.30],
+    "chill":       [0.20, 0.25, 0.40, 0.40, 0.60, 0.30, 0.20],
+    "melancholic": [0.20, 0.20, 0.25, 0.25, 0.10, 0.30, 0.20],
+    "dark":        [0.60, 0.70, 0.80, 0.30, 0.10, 0.80, 0.80],
+    "epic":        [0.50, 0.60, 0.35, 0.50, 0.50, 0.75, 0.40],
+}, index=FEATURE_NAMES).T
+
+PROTOTYPE_SIGMA = 0.35
+song_vec = np.array([profile[f] for f in FEATURE_NAMES])
+dist2 = ((PROTOTYPES.values - song_vec) ** 2).sum(axis=1)
+acoustic = np.exp(-dist2 / (2 * PROTOTYPE_SIGMA ** 2))
+acoustic_scores = dict(zip(PROTOTYPES.index, acoustic / acoustic.sum()))
+
+# ---- B. CLAP (pretrained audio-text embedding) ---------------------------------------
+VIBE_TEXT = {
+    "party":       "energetic party dance music",
+    "happy":       "happy upbeat cheerful music",
+    "chill":       "chill relaxed laid-back music",
+    "melancholic": "sad melancholic emotional music",
+    "dark":        "dark intense aggressive music",
+    "epic":        "epic cinematic powerful music",
 }
 INSTRUMENTS = {   # instrument / texture tag -> text description
     "electric guitar": "distorted electric guitar",
@@ -774,7 +851,7 @@ INSTRUMENTS = {   # instrument / texture tag -> text description
 }
 
 def clap_scores(y, groups):
-    # Zero-shot CLAP: softmax within each group of labels, averaged over 10 s windows.
+    # Zero-shot CLAP: softmax within each group of labels, per 10 s window and averaged.
     from transformers import ClapModel, ClapProcessor
     model = ClapModel.from_pretrained(CLAP_MODEL).eval()
     processor = ClapProcessor.from_pretrained(CLAP_MODEL)
@@ -786,47 +863,98 @@ def clap_scores(y, groups):
     inputs = processor(text=texts, audio=windows, sampling_rate=clap_sr, return_tensors="pt", padding=True)
     with torch.no_grad():
         logits = model(**inputs).logits_per_audio                     # windows x texts
-    out, i = {}, 0
+    out, per_window, i = {}, {}, 0
     for name, g in groups.items():
-        probs = logits[:, i:i + len(g)].softmax(dim=-1).mean(dim=0).numpy()
-        out[name], i = dict(zip(g, probs)), i + len(g)
-    return out
-
-def scores_rules():
-    # Fallback without CLAP: vibe from tempo / onset rate / brightness, instruments from the stems.
-    onset_rate = len(onset_times) / DURATION
-    pick = ("party" if tempo >= 110 and onset_rate >= 3 else
-            "calm" if onset_rate < 1.5 and centroid.mean() < 1500 else "dreamy")
-    stem_tag = {"drums": "drums", "other": "synthesizer", "vocals": "voice", "bass": "electric guitar"}
-    inst = {k: 0.0 for k in INSTRUMENTS}
-    for stem, tag in stem_tag.items():
-        if stem_present[stem]:
-            inst[tag] += float(np.mean(stem_rms[stem]))
-    total = sum(inst.values()) or 1.0
-    return {"vibe": {v: float(v == pick) for v in VIBES}, "instruments": {k: v / total for k, v in inst.items()}}
+        probs = logits[:, i:i + len(g)].softmax(dim=-1).numpy()
+        out[name] = dict(zip(g, probs.mean(axis=0)))
+        per_window[name] = pd.DataFrame(probs, columns=list(g),
+                                        index=[f"{10 * w}-{10 * w + 10} s" for w in range(len(windows))])
+        i += len(g)
+    return out, per_window
 
 try:
-    scores = clap_scores(y, {"vibe": VIBES, "instruments": INSTRUMENTS})
-    VIBE_METHOD = f"CLAP zero-shot ({CLAP_MODEL})"
+    clap_out, clap_windows = clap_scores(y, {"vibe": VIBE_TEXT, "instruments": INSTRUMENTS})
+    clap_vibe, instrument_scores = clap_out["vibe"], clap_out["instruments"]
+    CLAP_OK = True
 except Exception as e:
-    print(f"CLAP unavailable ({type(e).__name__}: {e}); using rule-based fallback")
-    scores, VIBE_METHOD = scores_rules(), "rule-based fallback"
-vibe_scores, instrument_scores = scores["vibe"], scores["instruments"]
-
-VIBE = VIBE_OVERRIDE or max(vibe_scores, key=vibe_scores.get)
-print(f"Vibe: {VIBE}  ({VIBE_METHOD}{', overridden' if VIBE_OVERRIDE else ''})")
-
-fig, axes = plt.subplots(1, 2, figsize=(12, 3.0))
+    print(f"CLAP unavailable ({type(e).__name__}: {e}); using the acoustic profile only")
+    CLAP_OK, clap_windows = False, None
+    clap_vibe = acoustic_scores
+    stem_tag = {"drums": "drums", "other": "synthesizer", "vocals": "voice", "bass": "electric guitar"}
+    instrument_scores = {k: 0.0 for k in INSTRUMENTS}
+    for stem, tag in stem_tag.items():
+        if stem_present[stem]:
+            instrument_scores[tag] += stem_means[stem] / sum(stem_means.values())
 top_instruments = sorted(instrument_scores, key=instrument_scores.get, reverse=True)[:2]
-for ax, sc, chosen, title in [(axes[0], vibe_scores, [VIBE], "Vibe"),
-                              (axes[1], instrument_scores, top_instruments, "Instruments / textures")]:
-    names = list(sc)
-    ax.barh(names, [sc[n] for n in names], color=[COLORS["rms"] if n in chosen else "#c3c2b7" for n in names], height=0.6)
-    for k, n in enumerate(names):
-        ax.text(sc[n] + 0.01, k, f"{sc[n]:.0%}", va="center", fontsize=9)
-    ax.set(xlim=(0, 1.1), xlabel="probability", title=f"{title} (CLAP, averaged over 10 s windows)")
-    ax.invert_yaxis(); ax.grid(axis="y", visible=False)
+
+# ---- Combine the two audio opinions ------------------------------------------------------
+w = VIBE_WEIGHTS
+vibe_scores = {v: w["acoustic"] * acoustic_scores[v] + w["clap"] * clap_vibe[v] for v in VIBE_NAMES}
+AUDIO_VIBE = max(vibe_scores, key=vibe_scores.get)
+
+print(f"Key: {KEY} (r = {key_corr:.2f}) | dynamic range {dynamic_range_db:.1f} dB | drum share {DRUM_SHARE:.0%}")
+pd.DataFrame({"acoustic profile": profile}).T.round(2)
+""")
+
+code(r"""
+# ---- C. Lyrics: transcribe the vocal stem, then score its sentiment -----------------------
+LYRICS, LYRIC_NEGATIVITY, LYRICS_NOTE, LYRICS_MOSTLY_NEGATIVE = "", None, "", False
+if not LYRICS_ANALYSIS:
+    LYRICS_NOTE = "skipped (LYRICS_ANALYSIS = False)"
+elif not stem_present["vocals"]:
+    LYRICS_NOTE = "skipped (no vocals detected)"
+else:
+    try:
+        from transformers import pipeline
+        from transformers.utils import logging as transformers_logging
+        transformers_logging.set_verbosity_error()
+        asr = pipeline("automatic-speech-recognition", model=WHISPER_MODEL, device=-1)   # clips are <= 30 s
+        vocals_16k = librosa.resample(stems["vocals"], orig_sr=SR, target_sr=16000)
+        LYRICS = asr({"raw": vocals_16k, "sampling_rate": 16000}, generate_kwargs={"task": "transcribe"})["text"].strip()
+        sentiment = pipeline("sentiment-analysis", model=SENTIMENT_MODEL, device=-1, top_k=None)
+        if LYRICS:
+            probs = {d["label"].lower(): d["score"] for d in sentiment(LYRICS[:1000])[0]}
+            LYRIC_NEGATIVITY = probs.get("negative", 0.0)          # probability the lyrics are negative
+            LYRICS_MOSTLY_NEGATIVE = max(probs, key=probs.get) == "negative"
+        LYRICS_NOTE = f"Whisper ({WHISPER_MODEL}) + sentiment ({SENTIMENT_MODEL})"
+    except Exception as e:
+        LYRICS_NOTE = f"failed ({type(e).__name__}: {e})"
+
+BITTERSWEET = (AUDIO_VIBE in ("party", "happy") and LYRICS_MOSTLY_NEGATIVE
+               and LYRIC_NEGATIVITY >= BITTERSWEET_NEGATIVITY)
+VIBE = VIBE_OVERRIDE or ("bittersweet" if BITTERSWEET else AUDIO_VIBE)
+VIBE_METHOD = (f"{w['acoustic']:.0%} acoustic profile + {w['clap']:.0%} CLAP" if CLAP_OK else "acoustic profile only") + \
+              (" + lyrics rule" if BITTERSWEET else "")
+
+print(f"Lyrics: {LYRICS_NOTE}")
+if LYRICS:
+    print(f'  transcript: "{LYRICS[:300]}{"..." if len(LYRICS) > 300 else ""}"')
+    print(f"  lyric negativity (P(negative)): {LYRIC_NEGATIVITY:.2f}")
+print(f"\nAudio vibe: {AUDIO_VIBE}  ->  FINAL VIBE: {VIBE}  ({VIBE_METHOD}{', overridden' if VIBE_OVERRIDE else ''})")
+
+fig, axes = plt.subplots(1, 3, figsize=(15, 3.4), gridspec_kw={"width_ratios": [1.1, 1.3, 1]})
+ax = axes[0]
+ax.barh(FEATURE_NAMES, [profile[f] for f in FEATURE_NAMES], color=COLORS["rms"], height=0.6)
+ax.set(xlim=(0, 1), title="A. Acoustic profile (0-1)"); ax.invert_yaxis(); ax.grid(axis="y", visible=False)
+ax = axes[1]
+x = np.arange(len(VIBE_NAMES))
+for k, (name, sc, color) in enumerate([("acoustic", acoustic_scores, COLORS["mid"]), ("CLAP", clap_vibe, COLORS["onset"]),
+                                       ("combined", vibe_scores, COLORS["rms"])]):
+    ax.bar(x + (k - 1) * 0.27, [sc[v] for v in VIBE_NAMES], width=0.25, color=color, label=name)
+ax.set_xticks(x, VIBE_NAMES, rotation=20)
+ax.set(ylabel="probability", title=f"Vibe scores (final: {VIBE})"); ax.legend(loc="upper right"); ax.grid(axis="x", visible=False)
+ax = axes[2]
+names = list(instrument_scores)
+ax.barh(names, [instrument_scores[n] for n in names],
+        color=[COLORS["rms"] if n in top_instruments else "#c3c2b7" for n in names], height=0.6)
+ax.set(xlim=(0, 1), title="Instruments / textures (CLAP)"); ax.invert_yaxis(); ax.grid(axis="y", visible=False)
 plt.tight_layout(); plt.savefig(FIG_DIR / "vibe.png"); plt.show()
+
+# How the vibe changes over time (CLAP per 10 s window) and the prototypes used by the acoustic rule
+if clap_windows is not None:
+    display(clap_windows["vibe"].round(2).style.background_gradient(axis=1, cmap="Blues")
+            .set_caption("CLAP vibe per 10-second window"))
+display(PROTOTYPES.style.format("{:.2f}").set_caption("Acoustic prototypes (expected feature values per vibe)"))
 """)
 
 # =============================================================================
@@ -840,7 +968,7 @@ So that different songs produce **different shapes**, not just different colours
 | Property | Measured from | Becomes | Rule |
 |---|---|---|---|
 | **Number of star points** | tempo | `N-pointed star` | < 80 BPM → 5, < 100 → 6, < 120 → 8, < 140 → 10, else 12 |
-| **Form** | key mode (Krumhansl–Schmuckler key estimate on chroma, drums removed) | major → *rounded petal shapes*, minor → *sharp angular shards* | |
+| **Form** | key mode (from section 9.1) | major → *rounded petal shapes*, minor → *sharp angular shards* | |
 | **Layout** | drum share of the stem energy ("rhythmic drive") | ≥ `DRIVE_THRESHOLD` → *concentric tunnel rings*, else *swirling spiral arms* | |
 | **Materials** | top 2 CLAP instrument / texture tags (section 9.1) | e.g. distorted guitar → *jagged shattered glass*, piano → *smooth ivory curves* | table below |
 | **Image seed** | fingerprint (SHA-256) of the clip's audio samples | `SONG_SEED + section` | same song → same images; different song → different compositions |
@@ -853,20 +981,9 @@ code(r"""
 # 1. Seed from the song itself: a fingerprint of the audio samples
 SONG_SEED = int(hashlib.sha256(np.round(y, 4).tobytes()).hexdigest()[:8], 16) % 1_000_000
 
-# 2a. Key and mode: correlate the mean chroma (drums removed) with rotated Krumhansl-Schmuckler profiles
-PITCHES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-KS_MAJOR = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
-KS_MINOR = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
-chroma_mean = librosa.feature.chroma_cqt(y=y - stems["drums"], sr=SR, hop_length=HOP_LENGTH).mean(axis=1)
-key_corr, key_idx, MODE = max((np.corrcoef(chroma_mean, np.roll(profile, k))[0, 1], k, mode)
-                              for mode, profile in (("major", KS_MAJOR), ("minor", KS_MINOR)) for k in range(12))
-KEY = f"{PITCHES[key_idx]} {MODE}"
-
-# 2b. Shape family
+# 2. Shape family (KEY / MODE and DRUM_SHARE were measured in section 9.1)
 N_POINTS = next(n for limit, n in [(80, 5), (100, 6), (120, 8), (140, 10), (np.inf, 12)] if tempo < limit)
 FORM = "rounded petal shapes" if MODE == "major" else "sharp angular shards"
-stem_means = {n: float(np.mean(stem_rms[n])) for n in STEM_NAMES if stem_present[n]}
-DRUM_SHARE = stem_means.get("drums", 0.0) / (sum(stem_means.values()) or 1.0)
 LAYOUT = "concentric tunnel rings" if DRUM_SHARE >= DRIVE_THRESHOLD else "swirling spiral arms"
 
 # 3. Materials from the two strongest instrument / texture tags
@@ -934,11 +1051,13 @@ STRUCTURE = f"luminous digital art, centered radial composition, {SHAPE_TEXT}, m
 
 # 2. Vibe theme shared by every section
 VIBE_THEMES = {
-    "party":  "neon club lights, laser beams, magenta and cyan glow",
-    "calm":   "soft mist, pastel light, gentle glow",
-    "dark":   "deep red and black, smoke, harsh light",
-    "dreamy": "nebula haze, violet and pink glow, soft bokeh",
-    "epic":   "golden light rays, vast cosmic scale",
+    "party":       "neon club lights, laser beams, magenta and cyan glow",
+    "happy":       "sunny warm light, golden and coral glow",
+    "chill":       "soft mist, pastel teal light, gentle glow",
+    "melancholic": "deep blue haze, muted indigo light, rain",
+    "dark":        "deep red and black, smoke, harsh light",
+    "epic":        "golden light rays, vast cosmic scale",
+    "bittersweet": "warm amber glow fading into cold blue shadow",
 }
 
 # 3. One short descriptor per feature and level
@@ -1635,7 +1754,8 @@ b = metrics[(metrics.version == "baseline")].set_index("feature")
 print(f"Audio source: {AUDIO_SOURCE} | {DURATION:.1f} s | tempo estimate {tempo:.1f} BPM")
 print(f"Sections: {n_sections} ({SECTION_METHOD}) at {np.round(section_edges[1:-1], 2).tolist()} s")
 print(f"Stems: {STEM_METHOD} | present: {[n for n in STEM_NAMES if stem_present[n]]} | drum hits: {len(drum_times)}")
-print(f"Vibe: {VIBE} ({VIBE_METHOD}) | shape: {SHAPE_TEXT} | materials: {MATERIAL_TEXT}")
+print(f"Vibe: {VIBE} ({VIBE_METHOD}) | key {KEY} | lyrics: {LYRICS_NOTE}")
+print(f"Shape: {SHAPE_TEXT} | materials: {MATERIAL_TEXT}")
 print(f"Images: {prompts.generated_by.unique().tolist()} | seeds {prompts.seed.tolist()} | {GEN_STEPS} steps\n")
 print("Motion energy vs audio (rendered frames, crossfades excluded):")
 for f in ["rms", "onset"]:
@@ -1667,8 +1787,10 @@ synchronization is answered by the survey (section 17), not by these numbers.
 * **Wavelength-inspired mapping:** large forms for bass and fine detail for highs is a cross-modal design metaphor; the visuals do not
   physically represent acoustic wavelength.
 * **Stems are estimates.** Demucs separation leaks between stems, and "other" mixes every remaining instrument.
-* **The vibe and instrument tags are coarse zero-shot guesses** from hand-written labels, not validated classifiers; close scores
-  (e.g. 31% vs 30%) mean the choice is nearly arbitrary, which is why `VIBE_OVERRIDE` exists.
+* **The vibe classifier is not trained or validated.** The acoustic prototypes are hand-written design rules, CLAP is zero-shot, and
+  the feature scalings (e.g. 80–125 BPM) are assumptions. Beat trackers can report half or double tempo, and loudness depends on
+  mastering. Close scores mean the choice is nearly arbitrary, which is why `VIBE_OVERRIDE` exists.
+* **Lyrics** come from automatic transcription of a separated vocal stem and can be wrong; binary sentiment misses irony and nuance.
 * **Shape rules are design metaphors** (tempo → number of points, minor key → shards); the key estimate can be wrong for songs with
   modulations or ambiguous harmony.
 * **Parts are found by radius**, which works because the prompts ask for a centred radial composition; arbitrary scenes
@@ -1682,6 +1804,8 @@ synchronization is answered by the survey (section 17), not by these numbers.
 ## 20. Future work
 
 * Run the identical notebook on one or two **real songs** (set `AUDIO_PATH`) to check that the pipeline is not clip-specific.
+* **Train a vibe classifier** (CNN on mel-spectrograms, or a small head on CLAP / YAMNet embeddings) once a labelled set of songs
+  exists, and validate it against listener ratings; use an LSTM / per-section vibe to let the theme evolve through the song.
 * Replace radial parts with **segmentation masks** (e.g. Segment Anything) to animate arbitrary objects such as lights or silhouettes
   in a themed scene.
 * Try a stronger model (SDXL-Turbo) if GPU memory allows, and compare prompt adherence.

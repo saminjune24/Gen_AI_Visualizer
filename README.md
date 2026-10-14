@@ -5,7 +5,7 @@ audio-reactive video. It combines **generative AI** (SD-Turbo creates one abstra
 section's measured audio features) with **procedural animation** (beats, bass/mid/high energy, RMS, onsets and spectral brightness
 and the separated **instrument stems** (drums / bass / vocals / other, via Demucs) move the **parts of each generated image**:
 the core grows with the bass, the inner star twists with the vocals, the outer star counter-rotates with the other instruments,
-line art and light spots flash and change colour on drum hits). A zero-shot audio model (CLAP) picks the song's **vibe**, which sets
+line art and light spots flash and change colour on drum hits). A vibe classifier (acoustic profile + CLAP + lyrics) picks the song's **vibe**, which sets
 the theme and palette of every prompt. It compares the result against a **non-audio-conditioned
 baseline** that uses the same images and effects.
 
@@ -35,7 +35,7 @@ audio -> features -> sections -> prompts -> SD-Turbo images -> frame-level contr
 | 4. Load audio | file or a synthesized 30 s, 4-part demo track |
 | 5–7. Features | onset strength, beats, RMS, spectral centroid, low/mid/high band energy, **Demucs instrument stems + drum hits**, then smoothing, robust normalization and a 24 fps control timeline |
 | 8–9. Sections | change-point detection on an activity curve (equal-window fallback) plus a per-section summary |
-| 9.1 Vibe | CLAP zero-shot vibe (party / calm / dark / dreamy / epic) → prompt theme, plus instrument / texture tags |
+| 9.1 Vibe | three opinions: an interpretable acoustic profile (tempo, transients, compression, brightness, major/minor, energy, noisiness) matched to vibe prototypes, CLAP zero-shot, and lyrics (Whisper on the vocal stem + sentiment) → party / happy / chill / melancholic / dark / epic / bittersweet |
 | 9.2 Song signature | tempo → number of star points, key mode → rounded petals vs sharp shards, drum share → tunnel rings vs spiral arms, instruments → materials, audio fingerprint → image seed |
 | 10–11. GenAI | song structure + vibe + section prompts; section 1 text-to-image, later sections image-to-image from the previous one; cached in `outputs/images/` |
 | 11.1 Layers | each image split into core / inner star / outer star (radial masks), line art (edges) and light spots |
@@ -55,7 +55,8 @@ python3.13 -m venv .venv
 ```
 
 * Image generation uses CUDA if available, Apple-silicon MPS otherwise, then CPU. The first run downloads SD-Turbo (~2.5 GB),
-  the Demucs model (~80 MB, runs on CPU: ~15 s per 30 s clip) and CLAP (~600 MB).
+  the Demucs model (~80 MB, runs on CPU: ~15 s per 30 s clip), CLAP (~600 MB), Whisper-small (~1 GB) and a RoBERTa
+  sentiment model (~500 MB).
 * The section images are committed, so re-running the notebook **does not regenerate them** unless the prompts change or
   `FORCE_REGENERATE = True`.
 * A full run takes about 1.5 minutes on an Apple-silicon laptop when images are cached.
