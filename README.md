@@ -34,13 +34,14 @@ audio -> features -> sections -> prompts -> SD-Turbo images -> frame-level contr
 | 3. Configuration | every tunable parameter in one cell |
 | 4. Load audio | file or a synthesized 30 s, 4-part demo track |
 | 5–7. Features | onset strength, beats, RMS, spectral centroid, low/mid/high band energy, **Demucs instrument stems + drum hits**, then smoothing, robust normalization and a 24 fps control timeline |
+| 7.1 Instruments | per-stem on/off states (hysteresis + 2 s hold) → instrument entrance / exit events |
 | 8–9. Sections | change-point detection on an activity curve (equal-window fallback) plus a per-section summary |
 | 9.1 Vibe | three opinions: an interpretable acoustic profile (tempo, transients, compression, brightness, major/minor, energy, noisiness) matched to vibe prototypes, CLAP zero-shot, and lyrics (Whisper on the vocal stem + sentiment) → party / happy / chill / melancholic / dark / epic / bittersweet |
 | 9.2 Song signature | tempo → number of star points, key mode → rounded petals vs sharp shards, drum share → tunnel rings vs spiral arms, instruments → materials, audio fingerprint → image seed |
 | 9.3 Beat changes | each section boundary scored by its largest change in drum level, drum-hit rate, bass or tempo; dramatic changes restart the image with a new shape family (tunnel / sunburst / crystal / vortex / flower / waves) and cut with a flash |
 | 10–11. GenAI | song structure + vibe + section prompts; section 1 text-to-image, later sections image-to-image from the previous one; cached in `outputs/images/` |
 | 11.1 Layers | each image split into core / inner star / outer star (radial masks), line art (edges) and light spots |
-| 12–14. Render | default **psychedelic** style: endless kaleidoscope zoom (lunges on beats), morph transitions (new image melts in, brightest parts first, with a swirl), colour cycling (speed from RMS, jumps on drum hits). Alternative `VISUAL_STYLE=modes`: seven motion modes chosen by shape family (kaleidoscope, zoom, shockwave, shatter, spin, sway, liquid flow) plus camera drift, each driven by the audio controls; FFmpeg muxes in the original audio |
+| 12–14. Render | default **psychedelic** style: endless kaleidoscope zoom (lunges on beats), morph transitions (new image melts in, brightest parts first, with a swirl), colour cycling (speed from RMS, jumps on drum hits), a 10 % zoom punch on every beat, and instruments inside the design (core / inner / outer lines glow orange / magenta / cyan with bass / vocals / other, rings bloom when an instrument enters, the number of mirror segments changes when instruments enter or leave). Alternative `VISUAL_STYLE=modes`: seven motion modes chosen by shape family (kaleidoscope, zoom, shockwave, shatter, spin, sway, liquid flow) plus camera drift, each driven by the audio controls; FFmpeg muxes in the original audio |
 | 15. Baseline | same images/effects, preset fixed-rate controls that never read the audio |
 | 16. Checks | motion energy from rendered frames, correlations, cross-correlation lag, QA |
 | 17. Survey | counterbalanced A/B design, response template and analysis helper |

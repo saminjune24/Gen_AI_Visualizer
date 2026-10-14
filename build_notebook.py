@@ -174,6 +174,10 @@ WHISPER_MODEL   = "openai/whisper-small"
 SENTIMENT_MODEL = "cardiffnlp/twitter-roberta-base-sentiment-latest"   # positive / neutral / negative
 BITTERSWEET_NEGATIVITY = 0.50 # upbeat audio + lyrics mostly negative (top class and >= 50%) -> "bittersweet"
 VIBE_OVERRIDE   = os.environ.get("VIBE_OVERRIDE") or None   # e.g. "dark" to force a vibe; None = detect it
+INSTRUMENT_ON, INSTRUMENT_OFF = 0.12, 0.06   # stem level (fraction of the mix) to switch an instrument on / off
+INSTRUMENT_HOLD_SEC = 2.0     # an instrument must stay on/off at least this long (ignores pauses between phrases)
+INSTRUMENT_SMOOTH_SEC = 1.0   # stem levels are averaged over this window before switching
+FOLD_MORPH_SEC      = 0.75    # how long the kaleidoscope takes to change its number of mirror segments
 DRIVE_THRESHOLD = 0.35        # drum share of stem energy above which the layout becomes "tunnel rings" (section 9.2)
 
 # ---- Sections -------------------------------------------------------------------
@@ -235,6 +239,9 @@ VIS = {
     "kaleido_rot_base": 3.0, "kaleido_rot_mid": 12.0,      # wedge rotation, deg/s
     "soft_attack_sec": 0.12,                               # psychedelic: beat/drum/onset pulses swell in over ~2 frames
     "psy_flash_scale": 0.4,                                # psychedelic: onset flashes at 40% strength
+    "beat_zoom_amp": 0.10,                                 # zoom punch: +10% zoom on every beat, easing back out
+    "instrument_line_gain": 0.9,                           # brightness of the instrument-coloured line art
+    "instrument_entry_glow": 0.45,                         # bloom of an instrument's ring when it enters
     "hue_speed_base": 0.02, "hue_speed_rms": 0.10, "hue_jump_drum": 0.03,     # colour cycling, turns/s and per hit
     "morph_swirl": 2.5,                                    # radians of swirl at the middle of a morph
     "beat_saturation": 0.35,                               # extra saturation on each beat
@@ -668,6 +675,78 @@ ax.set(title="Control timeline close-up (8-14 s): beats (dotted) and drum hits b
        xlabel="time (s)", ylabel="value (0-1)")
 ax.legend(loc="upper right")
 plt.tight_layout(); plt.savefig(FIG_DIR / "timeline_closeup.png"); plt.show()
+""")
+
+# =============================================================================
+# 7.1 Instrument activity
+# =============================================================================
+md(r"""
+### 7.1 When does each instrument play? (entrances and exits)
+
+To show **changes of instrument inside the design**, each stem is turned into an on/off state per video frame:
+
+* level = stem RMS averaged over `INSTRUMENT_SMOOTH_SEC` (1 s), as a fraction of the full mix's loud level;
+* an instrument switches **on** above `INSTRUMENT_ON` (12 %) and **off** below `INSTRUMENT_OFF` (6 %) (hysteresis, so it does not
+  flicker around one threshold), and must hold each state for `INSTRUMENT_HOLD_SEC` (2 s), so short pauses between phrases
+  are not counted as the instrument leaving.
+
+Every switch is an **instrument change event** (e.g. "vocals enter at 4.2 s"). In the renderer (section 12):
+
+| Instrument | Part of the design | Colour | What you see |
+|---|---|---|---|
+| bass | core | orange | core lines glow orange as loud as the bass; core blooms when the bass enters |
+| vocals (lead) | inner star | magenta | inner-star lines glow with the vocals (mid band if there are no vocals) |
+| other (synths, guitars, keys) | outer ring | cyan | outer lines glow with the other instruments |
+| drums | light spots | (colour cycling) | lights flare on hits and when the drums enter |
+
+and the **number of kaleidoscope mirror segments** follows how many instruments are playing
+(`N_POINTS + 2 × (active − 2)`, between 4 and 16), morphing over `FOLD_MORPH_SEC` whenever an instrument enters or leaves.
+""")
+
+code(r"""
+INSTRUMENT_COLORS = {"bass": (1.00, 0.55, 0.15), "vocals": (1.00, 0.30, 0.75),
+                     "other": (0.30, 0.90, 1.00), "drums": (1.00, 0.95, 0.70)}
+
+def on_off(level, times, on=INSTRUMENT_ON, off=INSTRUMENT_OFF, hold=INSTRUMENT_HOLD_SEC):
+    # Hysteresis switch with a minimum hold time.
+    state, active, last = np.zeros(len(level), int), False, -np.inf
+    for i, (x, t) in enumerate(zip(level, times)):
+        if not active and x >= on and t - last >= hold:
+            active, last = True, t
+        elif active and x < off and t - last >= hold:
+            active, last = False, t
+        state[i] = active
+    return state
+
+events = []
+for n in STEM_NAMES:
+    win = max(1, int(round(INSTRUMENT_SMOOTH_SEC * SR / HOP_LENGTH)))
+    smoothed = uniform_filter1d(stem_rms[n].astype(float), size=win, mode="nearest") / mix_level
+    level = np.interp(frame_times, feat_times, smoothed)
+    timeline[f"active_{n}"] = on_off(level, frame_times) if stem_present[n] else 0
+    changes = np.flatnonzero(np.diff(timeline[f"active_{n}"].values)) + 1
+    events += [{"time_sec": round(frame_times[i], 2), "instrument": n,
+                "change": "enters" if timeline[f"active_{n}"].values[i] else "leaves"} for i in changes]
+    entries = [frame_times[i] for i in changes if timeline[f"active_{n}"].values[i]]
+    if timeline[f"active_{n}"].values[0]:
+        entries = [0.0] + entries
+    timeline[f"enter_{n}"] = event_envelope(entries, frame_times, k=3.0)   # ~0.3 s bloom after an entrance
+timeline["active_count"] = timeline[[f"active_{n}" for n in STEM_NAMES]].sum(axis=1)
+instrument_events = pd.DataFrame(events, columns=["time_sec", "instrument", "change"]).sort_values("time_sec")
+instrument_events.to_csv(OUTPUT_DIR / "instrument_events.csv", index=False)
+
+fig, ax = plt.subplots(figsize=(12, 2.6))
+for k, n in enumerate(STEM_NAMES):
+    on = timeline[f"active_{n}"].values.astype(bool)
+    starts = np.flatnonzero(np.diff(np.r_[0, on.astype(int)]) == 1)
+    ends = np.flatnonzero(np.diff(np.r_[on.astype(int), 0]) == -1)
+    ax.broken_barh([(frame_times[a], frame_times[e] - frame_times[a] + 1 / FPS) for a, e in zip(starts, ends)],
+                   (k - 0.35, 0.7), color=INSTRUMENT_COLORS[n])
+ax.set_yticks(range(len(STEM_NAMES)), STEM_NAMES)
+ax.set(xlim=(0, DURATION), xlabel="time (s)", title="Instrument activity (bars = playing); every bar edge is an instrument change")
+ax.grid(axis="y", visible=False)
+plt.tight_layout(); plt.savefig(FIG_DIR / "instrument_activity.png"); plt.show()
+instrument_events if len(instrument_events) else print("No instrument changes in this clip")
 """)
 
 # =============================================================================
@@ -1467,6 +1546,8 @@ details follow high frequencies (the wavelength-inspired grammar from section 10
 | **Always kaleidoscope** | the image is folded into N mirrored wedges (N = the song's star points) | wedge rotation: mid band; pattern slides through the wedges: other stem |
 | **Morph transitions** | the next image *melts in*, its brightest parts first, while a swirl twists both images (peak at the middle of the transition); no hard cuts and no flash | 2.5 s normally, 1.5 s at a dramatic beat change |
 | **Colour cycling** | the whole frame rotates through the rainbow; saturation pops on every beat | hue speed: RMS; hue jump on every drum hit |
+| **Beat zoom punch** | on every beat the view punches in by 10 % and eases back out (on top of the endless zoom) | beat pulse |
+| **Instruments in the design** | core / inner / outer lines glow orange / magenta / cyan as loud as bass / vocals / other; a ring blooms when its instrument enters; the number of mirror segments changes when instruments enter or leave | stems + instrument events (section 7.1) |
 
 **No cuts:** in this style every beat, drum-hit and onset pulse is softened so it swells in over ~2 frames (peak still on the beat),
 colour steps on drum hits glide in as the hit decays, and onset flashes are at 40 % strength. One-frame jumps read as cuts; these
@@ -1529,7 +1610,23 @@ def visual_params(ctrl, edges, crossfades=CROSSFADE_SECONDS, flash_times=()):
     starts, lengths = np.asarray(edges[:-1]), np.diff(edges)
     p["age_a"] = np.clip((t - starts[p.img_a]) / lengths[p.img_a], 0, 1)
     p["age_b"] = np.clip((t - starts[p.img_b]) / lengths[p.img_b], 0, 1)
-    p["zoom"] = v["zoom_base"] + v["zoom_bass"] * ctrl.bass.values
+    # Zoom: slight bass push, plus a zoom PUNCH on every beat (+10%, easing back out)
+    p["zoom"] = (v["zoom_base"] + v["zoom_bass"] * ctrl.bass.values) * (1 + v["beat_zoom_amp"] * beat)
+    # Instruments inside the design: per-ring levels, entrance blooms, and kaleidoscope segment count
+    p["lvl_bass"], p["lvl_lead"], p["lvl_other"] = ctrl.bass_stem.values, ctrl.lead.values, ctrl.other.values
+    for n in ["bass", "vocals", "other", "drums"]:
+        p[f"enter_{n}"] = ctrl[f"enter_{n}"].values
+    target = np.clip(N_POINTS + 2 * (np.asarray(ctrl.active_count, int) - 2), 4, 16) * np.ones(len(t), int)
+    fold_a, fold_b, fold_mix = target.copy(), target.copy(), np.zeros(len(t))
+    n_morph, current, previous, changed = max(1, int(FOLD_MORPH_SEC * FPS)), target[0], target[0], -10 ** 9
+    for i in range(len(t)):
+        if target[i] != current:
+            previous, current, changed = current, target[i], i
+        if i - changed < n_morph:               # morph from the old to the new number of segments
+            fold_a[i], fold_b[i], fold_mix[i] = previous, current, smoothstep(0, 1, (i - changed) / n_morph)
+        else:
+            fold_a[i] = fold_b[i] = current
+    p["fold_a"], p["fold_b"], p["fold_mix"] = fold_a, fold_b, fold_mix
     p["core_scale"] = 1 + v["core_scale_bass"] * ctrl.bass_stem.values + v["core_scale_beat"] * beat
     p["core_angle"] = deg_per_frame(np.full(len(t), v["core_rot_base"]))
     p["inner_angle"] = deg_per_frame(v["inner_rot_base"] + v["inner_rot_lead"] * ctrl.lead.values)
@@ -1681,12 +1778,14 @@ def hue_rotate(img, turns):
     return np.clip(img @ M.T, 0, 1)
 
 R_MIRROR = 0.95                                     # radius at which the endless zoom mirrors back inward
+ZONES = part_weights(RADIUS, VIS["core_radius"], VIS["inner_radius"])     # core / inner / outer rings of the frame
+INSTR_RGB = {n: np.array(c, np.float32) for n, c in INSTRUMENT_COLORS.items()}
 
-def kaleido_zoom_maps(p, scale, swirl):
-    # Kaleidoscope fold + zoom by `scale` + radial mirroring (concentric repeats) + optional morph swirl.
-    wedge = 2 * np.pi / N_POINTS
+def kaleido_zoom_maps(p, scale, swirl, folds):
+    # Kaleidoscope fold into `folds` segments + zoom by `scale` + radial mirroring (concentric repeats) + morph swirl.
+    wedge = 2 * np.pi / folds
     folded = np.abs(np.mod(THETA - np.deg2rad(p.kaleido_angle), wedge) - wedge / 2)
-    r = RADIUS / scale + p.ripple_amp * np.sin(VIS["ripple_waves"] * 2 * np.pi * RADIUS - p.ripple_phase)
+    r = RADIUS / (scale * p.zoom) + p.ripple_amp * np.sin(VIS["ripple_waves"] * 2 * np.pi * RADIUS - p.ripple_phase)
     r = R_MIRROR - np.abs(np.mod(r, 2 * R_MIRROR) - R_MIRROR)         # triangle wave: mirror the radius
     theta = folded + np.deg2rad(p.outer_angle) + swirl * np.exp(-2 * RADIUS)
     mx, my = polar_maps(r, theta)
@@ -1704,11 +1803,16 @@ def layers_psychedelic(p):
         img = np.zeros((S, S, 3), np.float32)
         lines = np.zeros((S, S), np.float32)
         lights = np.zeros((S, S), np.float32)
-        for scale, weight in ((2 ** f, 1 - w_next), (2 ** (f - 1), w_next)):
-            maps = kaleido_zoom_maps(p, scale, swirl)
-            img += weight * warp(images_for_render[k], maps)
-            lines += weight * warp(layers[k]["lines"], maps)
-            lights += weight * warp(layers[k]["lights"], maps)
+        folds = [(int(p.fold_a), 1 - p.fold_mix)] + ([(int(p.fold_b), p.fold_mix)] if p.fold_mix > 0 else [])
+        for scale, w_zoom in ((2 ** f, 1 - w_next), (2 ** (f - 1), w_next)):
+            for n_folds, w_fold in folds:                  # two segment counts are blended while they morph
+                weight = w_zoom * w_fold
+                if weight < 1e-3:
+                    continue
+                maps = kaleido_zoom_maps(p, scale, swirl, n_folds)
+                img += weight * warp(images_for_render[k], maps)
+                lines += weight * warp(layers[k]["lines"], maps)
+                lights += weight * warp(layers[k]["lights"], maps)
         out[k] = (img, lines, lights)
     if len(shown) == 1:
         return out[a]
@@ -1756,12 +1860,25 @@ def render_frame(p, frame_idx, images):
     # 4. Light spots take on a colour that changes on every drum hit (they glow brighter on hits)
     g = np.clip(lights * p.lights_gain, 0, 1)[..., None]
     img = img * (1 - g) + g * hue_to_rgb(p.light_hue)
-    # 5. Glowing line art (screen blend), then colour cycling (psychedelic), particles, onset flash
-    line_col = accent_color(images[a] if t < 0.5 else images[b])
+    # 5. Glowing line art (screen blend), colour cycling (psychedelic), particles, onset flash
     glow = lines + 0.8 * cv2.GaussianBlur(lines, (0, 0), 4.0)
-    img = 1 - (1 - img) * (1 - np.clip(glow[..., None] * line_col * p.lines_gain, 0, 1))
     if psychedelic:
         img = hue_rotate(img, p.hue_shift)
+        # Instruments inside the design: each ring's lines glow in its instrument's colour, as loud as the instrument,
+        # and the ring blooms when the instrument enters (colours applied after hue cycling so they stay recognisable)
+        w_core, w_inner, w_outer = ZONES
+        ring_rgb = (w_core[..., None] * INSTR_RGB["bass"] * (0.15 + p.lvl_bass)
+                    + w_inner[..., None] * INSTR_RGB["vocals"] * (0.15 + p.lvl_lead)
+                    + w_outer[..., None] * INSTR_RGB["other"] * (0.15 + p.lvl_other))
+        line_rgb = glow[..., None] * ring_rgb * VIS["instrument_line_gain"] * (0.6 + p.lines_gain)
+        bloom = VIS["instrument_entry_glow"] * (w_core[..., None] * INSTR_RGB["bass"] * p.enter_bass
+                                                + w_inner[..., None] * INSTR_RGB["vocals"] * p.enter_vocals
+                                                + w_outer[..., None] * INSTR_RGB["other"] * p.enter_other
+                                                + lights[..., None] * INSTR_RGB["drums"] * 2 * p.enter_drums)
+        img = 1 - (1 - img) * (1 - np.clip(line_rgb + bloom, 0, 1))
+    else:
+        line_col = accent_color(images[a] if t < 0.5 else images[b])
+        img = 1 - (1 - img) * (1 - np.clip(glow[..., None] * line_col * p.lines_gain, 0, 1))
     overlay = np.zeros((S, S, 3), np.float32)
     n = int(p.n_particles)
     jit = np.random.default_rng(frame_idx).normal(0, 1.5 * p.jitter, (n, 2))
@@ -1896,6 +2013,9 @@ def baseline_controls(times):
     c["drum_pulse"] = c["beat_pulse"]
     c["drum_hits"] = np.floor(times / BASELINE_PULSE_PERIOD)
     c["drum_unit"] = c["beat_pulse"]
+    c["active_count"] = 3                                   # constant: no instrument changes in the baseline
+    for n in ["bass", "vocals", "other", "drums"]:
+        c[f"enter_{n}"] = 0.0
     c["onset_pulse"] = 0.5 * np.exp(-PULSE_DECAY * (times % BASELINE_FLASH_PERIOD))
     return c
 
@@ -1924,7 +2044,8 @@ if RENDER_SHIFTED_CHECK:
     shift = int(BASELINE_SHIFT_SECONDS * FPS)
     shifted_ctrl = timeline.copy()
     cols = ["rms", "bass", "mid", "high", "centroid", "beat_pulse", "onset_pulse",
-            "drums", "bass_stem", "other", "vocals", "lead", "drum_pulse", "drum_hits", "drum_unit"]
+            "drums", "bass_stem", "other", "vocals", "lead", "drum_pulse", "drum_hits", "drum_unit",
+            "active_count", "enter_bass", "enter_vocals", "enter_other", "enter_drums"]
     shifted_ctrl[cols] = np.roll(timeline[cols].values, shift, axis=0)
     shifted_params = visual_params(shifted_ctrl, section_edges)
     shifted_render = render_video(shifted_params, OUTPUT_DIR / "shifted_silent.mp4", section_images)
@@ -2108,6 +2229,8 @@ print(f"Vibe: {VIBE} ({VIBE_METHOD}) | key {KEY} | lyrics: {LYRICS_NOTE}")
 print(f"Shapes per section: {prompts.shape_family.tolist()} | dramatic beat changes at {DRAMATIC_BOUNDARIES.tolist()} s")
 print(f"Visual style: {VISUAL_STYLE}" + ("" if VISUAL_STYLE == "psychedelic" else f" | motion per section: {SECTION_MODES}"))
 print(f"Materials: {MATERIAL_TEXT}")
+print(f"Instrument changes: {len(instrument_events)} " +
+      ", ".join(f"{r.instrument} {r.change} {r.time_sec:.1f}s" for r in instrument_events.itertuples()))
 print(f"Images: {prompts.generated_by.unique().tolist()} | seeds {prompts.seed.tolist()} | {GEN_STEPS} steps\n")
 print("Motion energy vs audio (rendered frames, crossfades excluded):")
 for f in ["rms", "onset"]:
