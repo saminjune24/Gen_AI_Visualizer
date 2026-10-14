@@ -219,6 +219,13 @@ VIS = {
     "saturation_base": 0.80, "saturation_rms": 0.50,
     "sharpness_base": 0.90, "sharpness_centroid": 0.30,    # >1 sharpens, <1 softens
     "flash_onset": 0.12,                                   # max additive white flash
+    # Motion modes (section 12): each shape family moves in its own way
+    "drift_amp": 0.035, "drift_speed_base": 0.05, "drift_speed_lead": 0.15,  # slow camera drift (all modes)
+    "sway_deg": 28.0, "sway_speed_base": 0.25, "sway_speed_lead": 0.5,   # sway: rock back and forth (cycles/s)
+    "zoom_push": 0.70,                                     # zoom: fly into the image over the section
+    "shock_speed": 1.6, "shock_amp": 0.06, "shock_width": 0.07,          # shockwave: ring wave from each beat
+    "shatter_tiles": 6, "shatter_amp": 0.07,               # shatter: tiles jump apart on drum hits
+    "flow_amp_base": 0.010, "flow_amp_lead": 0.030, "flow_speed_base": 0.3, "flow_speed_lead": 1.2,  # flow: liquid
 }
 
 # ---- Baseline (section 15): fixed rules that never read the audio ------------------------
@@ -1048,12 +1055,13 @@ hi-hats keep the same hit rate, and averaging would dilute it. If the **change s
 | heavy drums, fewer hits | radiating **sunburst** of light rays |
 | light drums, bright highs | faceted **crystal** geode |
 | light drums, strong mids | spiral **vortex** galaxy |
+| light drums, quiet | flowing **waves** of light (full-frame, not centred) |
 | otherwise | blooming **flower** |
 
    (if that equals the current shape, the next family in the list is used, so the shape always changes);
 3. **cuts** to the new image in `DRAMATIC_CROSSFADE` = 0.25 s with a flash, instead of the 1 s crossfade.
 
-All families stay centred and radial, so the part-by-part animation keeps working. Weights and threshold are design choices, checked
+Each family also has its **own motion style** (section 12), so a dramatic change switches both what you see and how it moves. Weights and threshold are design choices, checked
 on the synthesized demo track, where the true changes are known (kick + bass enter at 8 s and drop out at 24 s; hi-hats join at 16 s).
 """)
 
@@ -1067,7 +1075,7 @@ def window_mean(values, times, a, b):
 def hit_rate(a, b):
     return np.sum((drum_times >= a) & (drum_times < b)) / max(b - a, 1e-9)
 
-FAMILY_ORDER = ["tunnel", "sunburst", "crystal", "vortex", "flower"]
+FAMILY_ORDER = ["tunnel", "sunburst", "crystal", "vortex", "flower", "waves"]
 SHAPE_FAMILIES = {
     "star":     f"{N_POINTS}-pointed star inside a larger star, {LAYOUT}",      # the song-level shape (section 9.2)
     "tunnel":   "concentric hexagon tunnel receding to a bright center",
@@ -1075,6 +1083,7 @@ SHAPE_FAMILIES = {
     "crystal":  "faceted crystal geode with a glowing core",
     "vortex":   "spiral vortex galaxy swirling into a bright center",
     "flower":   "blooming flower with layered petals",
+    "waves":    "flowing layered waves of light across the frame",
 }
 
 def pick_family(sec_id, avoid):
@@ -1090,6 +1099,8 @@ def pick_family(sec_id, avoid):
         family = "crystal"
     elif row.mid >= 0.5:
         family = "vortex"
+    elif row.rms < 0.4:
+        family = "waves"
     else:
         family = "flower"
     if family == avoid:
@@ -1181,7 +1192,8 @@ def level(x):
 def structure(section):
     # Shape family for this section (section 9.3) + the song's form and materials (section 9.2)
     shape = SHAPE_FAMILIES[plan[section]["family"]]
-    return f"luminous digital art, centered radial composition, {shape}, {FORM}, made of {MATERIAL_TEXT}, dark background"
+    layout = "full-frame composition" if plan[section]["family"] == "waves" else "centered radial composition"
+    return f"luminous digital art, {layout}, {shape}, {FORM}, made of {MATERIAL_TEXT}, dark background"
 
 # 2. Vibe theme shared by every section
 VIBE_THEMES = {
@@ -1432,6 +1444,25 @@ details follow high frequencies (the wavelength-inspired grammar from section 10
 | White flash | onsets | brief flash | `flash = 0.12·onset_pulse` |
 | Section image | section id, dramatic beat change | crossfade / cut | 1 s crossfade; **0.25 s cut + flash** at a dramatic beat change |
 
+### Motion modes: every shape family moves differently
+
+Spinning rings are only one of seven motion styles. Each section's image moves according to its shape family (section 9.3), and the
+same audio controls drive each style in its own way:
+
+| Shape family | Motion mode | What moves | Driven by |
+|---|---|---|---|
+| star (song shape) | **kaleidoscope** | image folded into N mirrored wedges (N = the song's star points) that slide through the pattern | other stem (slide), mid (fold rotation), bass (scale) |
+| tunnel | **zoom** | flies *into* the image over the section, punching forward on beats | bass + beats |
+| sunburst | **shockwave** | a ring wave travels outward from the centre on every beat | beats, bass |
+| crystal | **shatter** | the image breaks into tiles that jump apart on every drum hit, then snap back | drum hits |
+| vortex | **spin** | inner star twists clockwise, outer star counter-rotates, core pulses (the original mode) | lead, other stem, bass |
+| flower | **sway** | petals rock back and forth instead of spinning; the core blooms | lead, bass |
+| waves | **flow** | the whole image ripples like liquid, sideways and up | lead (speed + depth), RMS |
+
+All modes add a slow **camera drift** (speed from the lead voice) so nothing stays locked to the centre. Particles burst outward in the
+radial modes and rise like sparks in *sway* and *flow*. During a crossfade, each of the two images keeps its own motion mode.
+The line-art and light-spot layers use the same warp as their image, so they stay attached to the artwork.
+
 Rotation angles are integrated over time (`cumsum(speed) / FPS`) so speed changes never cause jumps. Both the audio-conditioned version
 and the baseline produce a **parameter table with identical columns**, and one renderer draws both.
 """)
@@ -1455,6 +1486,10 @@ def visual_params(ctrl, edges, crossfades=CROSSFADE_SECONDS, flash_times=()):
     deg_per_frame = lambda speed: np.cumsum(speed) / FPS           # integrate deg/s -> degrees
     p = pd.DataFrame({"time_sec": t})
     p["img_a"], p["img_b"], p["blend"] = crossfade_plan(t, edges, crossfades)
+    # Progress (0-1) through each displayed image's own section, used by the zoom mode
+    starts, lengths = np.asarray(edges[:-1]), np.diff(edges)
+    p["age_a"] = np.clip((t - starts[p.img_a]) / lengths[p.img_a], 0, 1)
+    p["age_b"] = np.clip((t - starts[p.img_b]) / lengths[p.img_b], 0, 1)
     p["zoom"] = v["zoom_base"] + v["zoom_bass"] * ctrl.bass.values
     p["core_scale"] = 1 + v["core_scale_bass"] * ctrl.bass_stem.values + v["core_scale_beat"] * ctrl.beat_pulse.values
     p["core_angle"] = deg_per_frame(np.full(len(t), v["core_rot_base"]))
@@ -1473,6 +1508,19 @@ def visual_params(ctrl, edges, crossfades=CROSSFADE_SECONDS, flash_times=()):
     p["brightness"] = v["brightness_base"] + v["brightness_rms"] * ctrl.rms.values
     p["saturation"] = v["saturation_base"] + v["saturation_rms"] * ctrl.rms.values
     p["sharpness"] = v["sharpness_base"] + v["sharpness_centroid"] * ctrl.centroid.values
+    # Motion-mode controls
+    lead = ctrl.lead.values
+    drift_phase = 2 * np.pi * np.cumsum(v["drift_speed_base"] + v["drift_speed_lead"] * lead) / FPS
+    p["drift_x"] = v["drift_amp"] * np.sin(drift_phase)
+    p["drift_y"] = v["drift_amp"] * np.sin(1.3 * drift_phase + 1.0)
+    sway_phase = 2 * np.pi * np.cumsum(v["sway_speed_base"] + v["sway_speed_lead"] * lead) / FPS
+    p["sway_angle"] = v["sway_deg"] * (0.4 + 0.6 * lead) * np.sin(sway_phase)
+    p["beat_pulse"] = ctrl.beat_pulse.values
+    p["beat_age"] = np.minimum(-np.log(np.maximum(ctrl.beat_pulse.values, 1e-6)) / PULSE_DECAY, 2.0)  # s since beat
+    p["drum_pulse"] = ctrl.drum_pulse.values
+    p["tile_seed"] = ctrl.drum_hits.values.astype(int)
+    p["flow_amp"] = v["flow_amp_base"] + v["flow_amp_lead"] * lead + 0.01 * ctrl.rms.values
+    p["flow_phase"] = 2 * np.pi * np.cumsum(v["flow_speed_base"] + v["flow_speed_lead"] * lead) / FPS
     p["flash"] = v["flash_onset"] * ctrl.onset_pulse.values
     for ft in flash_times:                                           # extra flash at dramatic beat changes
         p["flash"] += DRAMATIC_FLASH * np.where(t >= ft, np.exp(-PULSE_DECAY * (t - ft)), 0.0)
@@ -1490,11 +1538,11 @@ md(r"""
 
 For every frame the renderer reads **one row of the parameter table** (looked up by frame timestamp) and:
 
-1. **Builds one warp map in polar coordinates.** Every output pixel at radius *r* and angle *θ* samples the source image at a rotated,
-   scaled position. The rotation and scale are a soft mix of the core / inner / outer settings for that radius, plus the twist (extra
-   rotation growing across the inner star) and the high-frequency ripple. One `cv2.remap` call then moves all parts at once.
-2. Crossfades the two current section images and warps them with that map. The **line-art** and **light-spot** layers are warped with
-   the same map (so they stay attached to the artwork), with an extra outward stretch on drum hits.
+1. **Builds a warp map for each displayed image's motion mode** (section 12): kaleidoscope fold, zoom, shockwave, shatter, spin
+   (per-part rotation by radius with twist and ripple), sway, or liquid flow, plus the camera drift. One `cv2.remap` call per image
+   then moves every pixel.
+2. Blends the two current section images (each with its own mode during a crossfade). The **line-art** and **light-spot** layers are
+   warped with the same map (so they stay attached to the artwork), with an extra outward push on drum hits.
 3. Adjusts sharpness (unsharp mask), saturation and brightness.
 4. Recolours the light spots (a new colour on every drum hit, stronger on hits).
 5. Adds the glowing line art (accent colour of the image), particles and the onset flash.
@@ -1522,28 +1570,79 @@ def accent_color(img):
 def hue_to_rgb(h):
     return np.array([0.5 + 0.5 * np.cos(2 * np.pi * (h - o)) for o in (0.0, 1 / 3, 2 / 3)], np.float32)
 
-def warp_maps(p, extra_scale=1.0):
-    # Source sampling coordinates for every output pixel (polar warp: per-part rotation, scale, twist, ripple).
-    w_core, w_inner, w_outer = part_weights(RADIUS, VIS["core_radius"] * p.core_scale, VIS["inner_radius"])
-    twist = p.inner_twist * w_inner * (RADIUS - VIS["core_radius"])
-    angle = np.deg2rad(w_core * p.core_angle + w_inner * p.inner_angle + w_outer * p.outer_angle) + twist
-    scale = (w_core * p.core_scale + w_inner + w_outer * p.outer_scale) * p.zoom * extra_scale
-    r_src = RADIUS / scale + p.ripple_amp * np.sin(VIS["ripple_waves"] * 2 * np.pi * RADIUS - p.ripple_phase)
-    theta_src = THETA - angle
-    map_x = (CX + r_src * np.cos(theta_src) * (S / 2)).astype(np.float32)
-    map_y = (CY + r_src * np.sin(theta_src) * (S / 2)).astype(np.float32)
-    return map_x, map_y
+MOTION_MODES = {"star": "kaleidoscope", "tunnel": "zoom", "sunburst": "shockwave", "crystal": "shatter",
+                "vortex": "spin", "flower": "sway", "waves": "flow"}
+SECTION_MODES = [MOTION_MODES[f] for f in prompts.shape_family]     # one motion mode per section image
+RADIAL_PARTICLES = {"kaleidoscope", "zoom", "shockwave", "shatter", "spin"}   # others: rising sparks
+TILE_X, TILE_Y = (xx // (S / VIS["shatter_tiles"])).astype(int), (yy // (S / VIS["shatter_tiles"])).astype(int)
+
+def polar_maps(r_src, theta_src):
+    return CX + r_src * np.cos(theta_src) * (S / 2), CY + r_src * np.sin(theta_src) * (S / 2)
+
+def warp_maps(p, mode, age, extra_scale=1.0):
+    # Source sampling coordinates for every output pixel, for one motion mode.
+    v = VIS
+    if mode in ("spin", "sway"):
+        # Per-part rotation by radius: core / inner star / outer star (+ twist and fine ripple)
+        w_core, w_inner, w_outer = part_weights(RADIUS, v["core_radius"] * p.core_scale, v["inner_radius"])
+        if mode == "spin":
+            core_a, inner_a, outer_a, twist_k = p.core_angle, p.inner_angle, p.outer_angle, p.inner_twist
+        else:   # sway: rock back and forth instead of spinning
+            core_a, inner_a, outer_a, twist_k = 0.3 * p.sway_angle, p.sway_angle, -0.6 * p.sway_angle, 0.5 * p.inner_twist
+        twist = twist_k * w_inner * (RADIUS - v["core_radius"])
+        angle = np.deg2rad(w_core * core_a + w_inner * inner_a + w_outer * outer_a) + twist
+        scale = (w_core * p.core_scale + w_inner + w_outer * p.outer_scale) * p.zoom * extra_scale
+        r_src = RADIUS / scale + p.ripple_amp * np.sin(v["ripple_waves"] * 2 * np.pi * RADIUS - p.ripple_phase)
+        mx, my = polar_maps(r_src, THETA - angle)
+    elif mode == "kaleidoscope":
+        # Fold the image into N mirrored wedges; the pattern slides through the wedges
+        wedge = 2 * np.pi / N_POINTS
+        folded = np.abs(np.mod(THETA - np.deg2rad(0.3 * p.inner_angle), wedge) - wedge / 2)
+        r_src = RADIUS / (p.zoom * (1 + 0.5 * (p.core_scale - 1)) * extra_scale)
+        mx, my = polar_maps(r_src, folded + np.deg2rad(p.outer_angle))
+    elif mode == "zoom":
+        # Fly into the image over the section, with a forward punch on every beat
+        z = p.zoom * (1 + v["zoom_push"] * age) * (1 + 0.08 * p.beat_pulse) * extra_scale
+        mx, my = polar_maps(RADIUS / z, THETA - np.deg2rad(0.2 * p.core_angle))
+    elif mode == "shockwave":
+        # A ring wave travels outward from the centre after every beat
+        front = v["shock_speed"] * p.beat_age
+        wave = v["shock_amp"] * np.exp(-((RADIUS - front) / v["shock_width"]) ** 2) * np.exp(-1.5 * p.beat_age)
+        r_src = (RADIUS - wave) / (p.zoom * p.outer_scale * extra_scale)
+        mx, my = polar_maps(r_src, THETA - np.deg2rad(0.15 * p.core_angle))
+    elif mode == "shatter":
+        # Tiles jump apart on each drum hit (new random offsets per hit) and snap back as the hit decays
+        n = v["shatter_tiles"]
+        offsets = np.random.default_rng(int(p.tile_seed)).uniform(-1, 1, (n, n, 2)) * v["shatter_amp"] * S * p.drum_pulse
+        mx = CX + (xx - CX) / (p.zoom * extra_scale) + offsets[TILE_Y, TILE_X, 0]
+        my = CY + (yy - CY) / (p.zoom * extra_scale) + offsets[TILE_Y, TILE_X, 1]
+    else:   # "flow": liquid ripples across the whole frame
+        amp = p.flow_amp * S
+        mx = xx + amp * np.sin(2 * np.pi * yy / (0.6 * S) + p.flow_phase)
+        my = yy + amp * np.cos(2 * np.pi * xx / (0.8 * S) + 0.7 * p.flow_phase) + 0.02 * S * np.sin(0.5 * p.flow_phase)
+    # Slow camera drift for every mode, so nothing stays locked to the centre
+    return (mx + p.drift_x * S).astype(np.float32), (my + p.drift_y * S).astype(np.float32)
+
+def warp(img, maps):
+    return cv2.remap(img, maps[0], maps[1], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
 
 def render_frame(p, frame_idx, images):
     a, b, t = int(p.img_a), int(p.img_b), p.blend
-    mix = lambda key: (1 - t) * layers[a][key] + t * layers[b][key]
+    sections_shown = [(a, p.age_a, 1 - t)] + ([(b, p.age_b, t)] if t > 0 and b != a else [])
+    if len(sections_shown) == 1:
+        sections_shown = [(a, p.age_a, 1.0)]
 
-    # 1-2. Crossfade, then move every part of the image with one polar warp map
-    mx, my = warp_maps(p)
-    img = cv2.remap((1 - t) * images[a] + t * images[b], mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
-    sx, sy = warp_maps(p, extra_scale=p.lines_stretch)            # lines + lights stretch outward on drum hits
-    lines = cv2.remap(mix("lines"), sx, sy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
-    lights = cv2.remap(mix("lights"), sx, sy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    # 1-2. Move each displayed image (and its line-art / light layers) with its own section's motion mode, then blend
+    img = np.zeros((S, S, 3), np.float32)
+    lines = np.zeros((S, S), np.float32)
+    lights = np.zeros((S, S), np.float32)
+    for k, age, weight in sections_shown:
+        mode = SECTION_MODES[k]
+        maps = warp_maps(p, mode, age)
+        stretch = warp_maps(p, mode, age, extra_scale=p.lines_stretch)   # lines + lights push outward on drum hits
+        img += weight * warp(images[k], maps)
+        lines += weight * warp(layers[k]["lines"], stretch)
+        lights += weight * warp(layers[k]["lights"], stretch)
 
     # 3. Sharpness (centroid), saturation and brightness (RMS)
     blur = cv2.GaussianBlur(img, (0, 0), 2.0)
@@ -1559,11 +1658,16 @@ def render_frame(p, frame_idx, images):
     glow = lines + 0.8 * cv2.GaussianBlur(lines, (0, 0), 4.0)
     overlay = np.clip(glow[..., None] * line_col * p.lines_gain, 0, 1).astype(np.float32)
     n = int(p.n_particles)
-    r = (PARTICLES["r0"][:n] + PARTICLES["speed"][:n] * p.time_sec) % 0.75 * S
     jit = np.random.default_rng(frame_idx).normal(0, 1.5 * p.jitter, (n, 2))
-    px = (S / 2 + r * np.cos(PARTICLES["angle"][:n]) + jit[:, 0]).astype(int)
-    py = (S / 2 + r * np.sin(PARTICLES["angle"][:n]) + jit[:, 1]).astype(int)
-    for x0, y0, sz in zip(px, py, PARTICLES["size"][:n]):
+    if SECTION_MODES[a if t < 0.5 else b] in RADIAL_PARTICLES:     # burst outward from the centre
+        r = (PARTICLES["r0"][:n] + PARTICLES["speed"][:n] * p.time_sec) % 0.75 * S
+        px = S / 2 + r * np.cos(PARTICLES["angle"][:n]) + jit[:, 0]
+        py = S / 2 + r * np.sin(PARTICLES["angle"][:n]) + jit[:, 1]
+    else:                                                            # rise like sparks, swaying sideways
+        x0 = PARTICLES["angle"][:n] / (2 * np.pi) * S
+        px = x0 + 0.02 * S * np.sin(p.time_sec * 1.5 + x0) + jit[:, 0]
+        py = S - (PARTICLES["r0"][:n] * S + PARTICLES["speed"][:n] * 2 * S * p.time_sec) % S + jit[:, 1]
+    for x0, y0, sz in zip(px.astype(int), py.astype(int), PARTICLES["size"][:n]):
         cv2.circle(overlay, (int(x0), int(y0)), int(sz), (1.0, 1.0, 1.0), -1, cv2.LINE_AA)
     img = 1 - (1 - img) * (1 - overlay) + p.flash
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
@@ -1895,6 +1999,7 @@ print(f"Sections: {n_sections} ({SECTION_METHOD}) at {np.round(section_edges[1:-
 print(f"Stems: {STEM_METHOD} | present: {[n for n in STEM_NAMES if stem_present[n]]} | drum hits: {len(drum_times)}")
 print(f"Vibe: {VIBE} ({VIBE_METHOD}) | key {KEY} | lyrics: {LYRICS_NOTE}")
 print(f"Shapes per section: {prompts.shape_family.tolist()} | dramatic beat changes at {DRAMATIC_BOUNDARIES.tolist()} s")
+print(f"Motion per section: {SECTION_MODES}")
 print(f"Materials: {MATERIAL_TEXT}")
 print(f"Images: {prompts.generated_by.unique().tolist()} | seeds {prompts.seed.tolist()} | {GEN_STEPS} steps\n")
 print("Motion energy vs audio (rendered frames, crossfades excluded):")

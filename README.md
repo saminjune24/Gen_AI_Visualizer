@@ -37,10 +37,10 @@ audio -> features -> sections -> prompts -> SD-Turbo images -> frame-level contr
 | 8–9. Sections | change-point detection on an activity curve (equal-window fallback) plus a per-section summary |
 | 9.1 Vibe | three opinions: an interpretable acoustic profile (tempo, transients, compression, brightness, major/minor, energy, noisiness) matched to vibe prototypes, CLAP zero-shot, and lyrics (Whisper on the vocal stem + sentiment) → party / happy / chill / melancholic / dark / epic / bittersweet |
 | 9.2 Song signature | tempo → number of star points, key mode → rounded petals vs sharp shards, drum share → tunnel rings vs spiral arms, instruments → materials, audio fingerprint → image seed |
-| 9.3 Beat changes | each section boundary scored by its largest change in drum level, drum-hit rate, bass or tempo; dramatic changes restart the image with a new shape family (tunnel / sunburst / crystal / vortex / flower) and cut with a flash |
+| 9.3 Beat changes | each section boundary scored by its largest change in drum level, drum-hit rate, bass or tempo; dramatic changes restart the image with a new shape family (tunnel / sunburst / crystal / vortex / flower / waves) and cut with a flash |
 | 10–11. GenAI | song structure + vibe + section prompts; section 1 text-to-image, later sections image-to-image from the previous one; cached in `outputs/images/` |
 | 11.1 Layers | each image split into core / inner star / outer star (radial masks), line art (edges) and light spots |
-| 12–14. Render | polar-warp renderer that moves each image part with its own signal, then FFmpeg muxes in the original audio |
+| 12–14. Render | seven motion modes chosen by shape family (kaleidoscope, zoom, shockwave, shatter, spin, sway, liquid flow) plus camera drift, each driven by the audio controls; FFmpeg muxes in the original audio |
 | 15. Baseline | same images/effects, preset fixed-rate controls that never read the audio |
 | 16. Checks | motion energy from rendered frames, correlations, cross-correlation lag, QA |
 | 17. Survey | counterbalanced A/B design, response template and analysis helper |
