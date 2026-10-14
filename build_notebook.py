@@ -186,8 +186,8 @@ ACTIVITY_SMOOTH_SEC = 1.0     # extra smoothing before looking for change points
 DRAMATIC_WINDOW_SEC = 3.0     # compare this many seconds before vs after each section boundary
 DRAMATIC_WEIGHTS    = {"drums": 1.0, "drum_hits": 1.0, "bass": 1.0, "tempo": 0.5}   # tempo is noisy -> half weight
 DRAMATIC_THRESHOLD  = 0.50    # largest weighted change at or above this -> completely new image and shape
-DRAMATIC_CROSSFADE  = 0.6 if VISUAL_STYLE == "psychedelic" else 0.25   # seconds: fast morph / near-cut
-DRAMATIC_FLASH      = 0.35    # extra white flash at a dramatic change (audio-conditioned version only)
+DRAMATIC_CROSSFADE  = 1.5 if VISUAL_STYLE == "psychedelic" else 0.25   # seconds: morph (psychedelic) / near-cut
+DRAMATIC_FLASH      = 0.0 if VISUAL_STYLE == "psychedelic" else 0.35   # extra flash at a dramatic change (no flash = no cut)
 
 # ---- Image generation ---------------------------------------------------------------
 MODEL_ID        = "stabilityai/sd-turbo"
@@ -201,7 +201,7 @@ FORCE_REGENERATE = False      # True = ignore cached images and generate again
 # ---- Video ----------------------------------------------------------------------------
 FPS               = 24
 OUTPUT_SIZE       = 512       # square video, pixels
-CROSSFADE_SECONDS = 1.5 if VISUAL_STYLE == "psychedelic" else 1.0   # length of a normal transition (s)
+CROSSFADE_SECONDS = 2.5 if VISUAL_STYLE == "psychedelic" else 1.0   # length of a normal transition (s)
 PREVIEW_SECONDS   = 8.0       # length of the quick preview render
 
 # ---- Visual mapping coefficients (section 12) ------------------------------------------
@@ -231,8 +231,10 @@ VIS = {
     "shatter_tiles": 6, "shatter_amp": 0.07,               # shatter: tiles jump apart on drum hits
     "flow_amp_base": 0.010, "flow_amp_lead": 0.030, "flow_speed_base": 0.3, "flow_speed_lead": 1.2,  # flow: liquid
     # Psychedelic style (section 13)
-    "zoom_speed_base": 0.08, "zoom_speed_rms": 0.25, "zoom_speed_beat": 0.9,  # endless zoom, octaves per second
-    "kaleido_rot_base": 4.0, "kaleido_rot_mid": 25.0,      # wedge rotation, deg/s
+    "zoom_speed_base": 0.05, "zoom_speed_rms": 0.15, "zoom_speed_beat": 0.90,  # endless zoom: surges forward on beats
+    "kaleido_rot_base": 3.0, "kaleido_rot_mid": 12.0,      # wedge rotation, deg/s
+    "soft_attack_sec": 0.12,                               # psychedelic: beat/drum/onset pulses swell in over ~2 frames
+    "psy_flash_scale": 0.4,                                # psychedelic: onset flashes at 40% strength
     "hue_speed_base": 0.02, "hue_speed_rms": 0.10, "hue_jump_drum": 0.03,     # colour cycling, turns/s and per hit
     "morph_swirl": 2.5,                                    # radians of swirl at the middle of a morph
     "beat_saturation": 0.35,                               # extra saturation on each beat
@@ -641,6 +643,7 @@ LEAD_SOURCE = "vocals" if stem_present["vocals"] else "mid band"
 timeline["lead"] = timeline["vocals"] if stem_present["vocals"] else timeline["mid"]
 timeline["drum_pulse"] = event_envelope(drum_times, frame_times, weights=drum_strength)
 timeline["drum_hits"] = np.searchsorted(drum_times, frame_times, side="right")   # running count (light colours)
+timeline["drum_unit"] = event_envelope(drum_times, frame_times)   # unweighted decay after each hit (smooth colour steps)
 timeline["section_id"] = 0          # placeholder, set in section 8
 
 # Acceptance checks
@@ -1460,12 +1463,16 @@ details follow high frequencies (the wavelength-inspired grammar from section 10
 
 | Effect | What happens | Driven by |
 |---|---|---|
-| **Endless zoom** | the view keeps zooming into the image forever; two zoom levels one octave apart are blended so the loop never jumps, and the radius is mirrored so the pattern repeats in concentric rings | speed = 0.08 + 0.25·RMS + **0.9·beat pulse** octaves/s (lunges forward on every beat) |
+| **Endless zoom** | the view keeps zooming into the image forever; two zoom levels one octave apart are blended so the loop never jumps, and the radius is mirrored so the pattern repeats in concentric rings | speed = 0.05 + 0.15·RMS + **0.9·beat pulse** octaves/s (surges forward on every beat) |
 | **Always kaleidoscope** | the image is folded into N mirrored wedges (N = the song's star points) | wedge rotation: mid band; pattern slides through the wedges: other stem |
-| **Morph transitions** | the next image *melts in*, its brightest parts first, while a swirl twists both images (peak at the middle of the transition) | 1.5 s normally, 0.6 s + flash at a dramatic beat change |
+| **Morph transitions** | the next image *melts in*, its brightest parts first, while a swirl twists both images (peak at the middle of the transition); no hard cuts and no flash | 2.5 s normally, 1.5 s at a dramatic beat change |
 | **Colour cycling** | the whole frame rotates through the rainbow; saturation pops on every beat | hue speed: RMS; hue jump on every drum hit |
 
-Line art, light spots, particles, brightness, sharpness and flashes work as in the table above.
+**No cuts:** in this style every beat, drum-hit and onset pulse is softened so it swells in over ~2 frames (peak still on the beat),
+colour steps on drum hits glide in as the hit decays, and onset flashes are at 40 % strength. One-frame jumps read as cuts; these
+keep the motion continuous while staying in time with the music.
+
+Line art, light spots, particles, brightness and sharpness work as in the table above.
 
 ### Motion modes (`VISUAL_STYLE = "modes"`): every shape family moves differently
 
@@ -1508,24 +1515,33 @@ def visual_params(ctrl, edges, crossfades=CROSSFADE_SECONDS, flash_times=()):
     v, t = VIS, ctrl.time_sec.values
     deg_per_frame = lambda speed: np.cumsum(speed) / FPS           # integrate deg/s -> degrees
     p = pd.DataFrame({"time_sec": t})
+    # Event pulses. In the psychedelic style they are softened with a short centred window, so every hit swells in
+    # over ~0.1 s instead of jumping in one frame (a one-frame jump reads as a cut); the peak stays on the beat.
+    pulse = {c: ctrl[c].values.astype(float) for c in ["beat_pulse", "drum_pulse", "onset_pulse"]}
+    if VISUAL_STYLE == "psychedelic":
+        win = np.hanning(max(3, int(round(v["soft_attack_sec"] * FPS)) + 2))[1:-1]
+        pulse = {c: np.convolve(x, win / win.sum(), mode="same") for c, x in pulse.items()}
+    beat, drum, onset = pulse["beat_pulse"], pulse["drum_pulse"], pulse["onset_pulse"]
+    # Colour steps on drum hits are eased: +1 step glides in as the hit decays, instead of jumping
+    drum_steps = ctrl.drum_hits.values - ctrl.drum_unit.values
     p["img_a"], p["img_b"], p["blend"] = crossfade_plan(t, edges, crossfades)
     # Progress (0-1) through each displayed image's own section, used by the zoom mode
     starts, lengths = np.asarray(edges[:-1]), np.diff(edges)
     p["age_a"] = np.clip((t - starts[p.img_a]) / lengths[p.img_a], 0, 1)
     p["age_b"] = np.clip((t - starts[p.img_b]) / lengths[p.img_b], 0, 1)
     p["zoom"] = v["zoom_base"] + v["zoom_bass"] * ctrl.bass.values
-    p["core_scale"] = 1 + v["core_scale_bass"] * ctrl.bass_stem.values + v["core_scale_beat"] * ctrl.beat_pulse.values
+    p["core_scale"] = 1 + v["core_scale_bass"] * ctrl.bass_stem.values + v["core_scale_beat"] * beat
     p["core_angle"] = deg_per_frame(np.full(len(t), v["core_rot_base"]))
     p["inner_angle"] = deg_per_frame(v["inner_rot_base"] + v["inner_rot_lead"] * ctrl.lead.values)
     p["inner_twist"] = v["swirl_lead"] * ctrl.lead.values
     p["outer_angle"] = -deg_per_frame(v["outer_rot_base"] + v["outer_rot_other"] * ctrl.other.values)
-    p["outer_scale"] = 1 + v["outer_scale_beat"] * ctrl.beat_pulse.values
+    p["outer_scale"] = 1 + v["outer_scale_beat"] * beat
     p["ripple_amp"] = v["ripple_high"] * ctrl.high.values
     p["ripple_phase"] = 2 * np.pi * v["ripple_speed"] * t
-    p["lines_gain"] = v["lines_base"] + v["lines_drums"] * ctrl.drum_pulse.values
-    p["lines_stretch"] = 1 + v["lines_stretch"] * ctrl.drum_pulse.values
-    p["lights_gain"] = v["lights_base"] + v["lights_drums"] * ctrl.drum_pulse.values + v["lights_rms"] * ctrl.rms.values
-    p["light_hue"] = (v["light_hue_step"] * ctrl.drum_hits.values) % 1.0
+    p["lines_gain"] = v["lines_base"] + v["lines_drums"] * drum
+    p["lines_stretch"] = 1 + v["lines_stretch"] * drum
+    p["lights_gain"] = v["lights_base"] + v["lights_drums"] * drum + v["lights_rms"] * ctrl.rms.values
+    p["light_hue"] = (v["light_hue_step"] * drum_steps) % 1.0
     p["n_particles"] = (v["particles_min"] + v["particles_range"] * ctrl.high.values).astype(int)
     p["jitter"] = ctrl.high.values
     p["brightness"] = v["brightness_base"] + v["brightness_rms"] * ctrl.rms.values
@@ -1538,19 +1554,19 @@ def visual_params(ctrl, edges, crossfades=CROSSFADE_SECONDS, flash_times=()):
     p["drift_y"] = v["drift_amp"] * np.sin(1.3 * drift_phase + 1.0)
     sway_phase = 2 * np.pi * np.cumsum(v["sway_speed_base"] + v["sway_speed_lead"] * lead) / FPS
     p["sway_angle"] = v["sway_deg"] * (0.4 + 0.6 * lead) * np.sin(sway_phase)
-    p["beat_pulse"] = ctrl.beat_pulse.values
+    p["beat_pulse"] = beat
     p["beat_age"] = np.minimum(-np.log(np.maximum(ctrl.beat_pulse.values, 1e-6)) / PULSE_DECAY, 2.0)  # s since beat
-    p["drum_pulse"] = ctrl.drum_pulse.values
+    p["drum_pulse"] = drum
     p["tile_seed"] = ctrl.drum_hits.values.astype(int)
     p["flow_amp"] = v["flow_amp_base"] + v["flow_amp_lead"] * lead + 0.01 * ctrl.rms.values
     p["flow_phase"] = 2 * np.pi * np.cumsum(v["flow_speed_base"] + v["flow_speed_lead"] * lead) / FPS
     # Psychedelic style: endless-zoom phase (octaves), kaleidoscope rotation, colour-cycling hue
     p["zoom_phase"] = np.cumsum(v["zoom_speed_base"] + v["zoom_speed_rms"] * ctrl.rms.values
-                                + v["zoom_speed_beat"] * ctrl.beat_pulse.values) / FPS
+                                + v["zoom_speed_beat"] * beat) / FPS
     p["kaleido_angle"] = deg_per_frame(v["kaleido_rot_base"] + v["kaleido_rot_mid"] * ctrl.mid.values)
     p["hue_shift"] = (np.cumsum(v["hue_speed_base"] + v["hue_speed_rms"] * ctrl.rms.values) / FPS
-                      + v["hue_jump_drum"] * ctrl.drum_hits.values) % 1.0
-    p["flash"] = v["flash_onset"] * ctrl.onset_pulse.values
+                      + v["hue_jump_drum"] * drum_steps) % 1.0
+    p["flash"] = v["flash_onset"] * onset * (v["psy_flash_scale"] if VISUAL_STYLE == "psychedelic" else 1.0)
     for ft in flash_times:                                           # extra flash at dramatic beat changes
         p["flash"] += DRAMATIC_FLASH * np.where(t >= ft, np.exp(-PULSE_DECAY * (t - ft)), 0.0)
     return p
@@ -1879,6 +1895,7 @@ def baseline_controls(times):
     c["beat_pulse"] = np.exp(-PULSE_DECAY * (times % BASELINE_PULSE_PERIOD))
     c["drum_pulse"] = c["beat_pulse"]
     c["drum_hits"] = np.floor(times / BASELINE_PULSE_PERIOD)
+    c["drum_unit"] = c["beat_pulse"]
     c["onset_pulse"] = 0.5 * np.exp(-PULSE_DECAY * (times % BASELINE_FLASH_PERIOD))
     return c
 
@@ -1907,7 +1924,7 @@ if RENDER_SHIFTED_CHECK:
     shift = int(BASELINE_SHIFT_SECONDS * FPS)
     shifted_ctrl = timeline.copy()
     cols = ["rms", "bass", "mid", "high", "centroid", "beat_pulse", "onset_pulse",
-            "drums", "bass_stem", "other", "vocals", "lead", "drum_pulse", "drum_hits"]
+            "drums", "bass_stem", "other", "vocals", "lead", "drum_pulse", "drum_hits", "drum_unit"]
     shifted_ctrl[cols] = np.roll(timeline[cols].values, shift, axis=0)
     shifted_params = visual_params(shifted_ctrl, section_edges)
     shifted_render = render_video(shifted_params, OUTPUT_DIR / "shifted_silent.mp4", section_images)
