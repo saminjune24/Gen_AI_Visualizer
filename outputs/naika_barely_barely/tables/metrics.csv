@@ -1,9 +1,17 @@
-version,feature,pearson_r,spearman_rho,best_lag_ms
-audio-conditioned,rms,0.21150011486763726,0.2047548014530163,
-audio-conditioned,onset,0.21203715001954787,0.23274217800237496,0.0
-audio-conditioned,drums,0.12075157429199142,0.18918308295370231,
-audio-conditioned,bass_stem,0.03271783306276515,0.1711025843064786,
-baseline,rms,-0.14724438975765936,-0.3880816214476314,
-baseline,onset,-0.12506257833726842,-0.11902196475084569,-125.0
-baseline,drums,-0.14062797582441136,-0.3547903785107618,
-baseline,bass_stem,-0.06048391355390855,-0.34700951837278743,
+version,feature,pearson_r,spearman_rho,best_lag_ms,contrast,n_events
+audio-conditioned,rms,0.4347828393937546,0.4363399238667048,,,
+audio-conditioned,onset,0.3635587038919588,0.3245232028897583,0.0,,
+audio-conditioned,drums,0.4687455709824029,0.4815214655205487,,,
+audio-conditioned,bass_stem,0.06826968783325874,0.33345256103323184,,,
+baseline,rms,-0.14520950431627028,-0.3780861287031266,,,
+baseline,onset,-0.12344529793890455,-0.11607890304707542,-125.0,,
+baseline,drums,-0.1422118990156886,-0.3479809249841907,,,
+baseline,bass_stem,-0.06161677466886493,-0.3419252832686437,,,
+audio-conditioned,beats-locked contrast,,,,1.3896324447748383,67.0
+audio-conditioned,kicks-locked contrast,,,,1.4289228911655798,45.0
+audio-conditioned,snares-locked contrast,,,,1.1993803943589758,39.0
+audio-conditioned,vocal accents-locked contrast,,,,0.9575563422431951,50.0
+baseline,beats-locked contrast,,,,1.1484089986353,67.0
+baseline,kicks-locked contrast,,,,0.8427168047894463,45.0
+baseline,snares-locked contrast,,,,0.8037152113755807,39.0
+baseline,vocal accents-locked contrast,,,,0.9322393478653851,50.0

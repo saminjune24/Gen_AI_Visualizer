@@ -129,6 +129,7 @@ audio clip
 | Load | 30 s clip, mono, 22,050 Hz | librosa |
 | Features | onset strength (spectral flux), beat times + tempo, RMS energy, spectral centroid, energy in three bands: bass 20–250 Hz, mid 250–2000 Hz, high 2000–8000 Hz | librosa, NumPy |
 | Instruments | split the clip into **drums, bass, vocals and "other"** (synths, guitars, keys), then detect the drum hits on the drum track alone | Demucs `htdemucs` |
+| Drum elements | classify every drum hit as **kick** (≥ 50 % of its energy below 150 Hz), **hi-hat** (very bright, no low end) or **snare / clap** (everything else), and find **vocal accents** (onsets on the vocal track, merged into phrases) | librosa |
 | Clean-up | 0.25 s rolling mean, then clip each feature to its 5th–95th percentile and scale it to 0–1 | SciPy |
 | Control timeline | resample everything to one row per video frame (720 rows for 30 s at 24 fps); beats and hits become short decaying pulses | pandas |
 | Instrument activity | each instrument is switched on/off (with hysteresis and a 2 s minimum) → a list of entrances and exits | — |
@@ -209,7 +210,10 @@ inspectable formulas. The default **psychedelic** style:
 | Effect | What you see | Driven by |
 |---|---|---|
 | Endless zoom | the view keeps zooming into the pattern; new rings keep appearing from the centre | speed: loudness; surges on every beat |
-| Beat zoom punch | the view punches in on every beat (2–15 % depending on the profile) and eases back | beats |
+| Kick → zoom punch | the view punches in on every **kick** (2–15 % depending on the profile) and eases back; the centre swells | kick hits (beat grid if there is no kick) |
+| Snare → accents | on every **snare** (the backbeat) the kaleidoscope twists a few degrees, a white flash, light spots and line art flare | snare hits |
+| Hi-hats → sparkle | hi-hats only add particles, so they never trigger the big effects | hi-hat hits + high band |
+| Vocals → bloom | the inner star glows magenta on each vocal phrase | vocal accents |
 | Kaleidoscope | the image is folded into mirrored wedges that rotate and slide | wedges: mid band; sliding: "other" instruments |
 | Instruments in the design | core / inner star / outer ring lines glow **orange / magenta / cyan** as loud as **bass / vocals / other**; a ring blooms when its instrument enters; the number of mirror segments changes when instruments enter or leave | instrument stems + entrances/exits |
 | Light spots | the image's bright spots flare and change colour | drum hits |
@@ -234,6 +238,8 @@ kaleidoscope, zoom, shockwave, shatter, spin, sway and liquid flow.
   * visual motion energy = mean absolute difference between consecutive frames;
   * Pearson / Spearman correlation of motion energy with onset strength, RMS and the drum/bass stems, for both videos (crossfades excluded);
   * the time lag at which onsets and motion line up best;
+  * **event-locked contrast**: the average motion right at each kick / snare / vocal accent divided by the motion just before it
+    (> 1 = the picture visibly reacts to that kind of event; the baseline should stay near 1);
   * QA: beats map to pulses, transitions sit on section boundaries, video length = audio length.
 * **Survey design.** A within-subjects A/B test: each participant watches both versions (neutral labels, order counterbalanced) and rates
   synchronization (primary outcome), reflecting musical changes, connection to the audio and visual appeal on 1–5, then picks the one
@@ -256,8 +262,11 @@ Three 30 s clips: the demo track and two songs that are not in the repo (see [`s
 | Palette | violet, deep teal and silver | coral, turquoise and warm gold, fading into cold blue | warm amber, burgundy and soft gold |
 | Dramatic beat changes | 8.0 s, 16.4 s, 24.0 s | 9.0 s | 11.3 s, 21.1 s |
 | Instrument changes | 5 | 21 | 9 |
-| **Onset ↔ motion r** (audio vs. baseline) | **0.66** vs. −0.01 | **0.21** vs. −0.13 | **0.41** vs. 0.01 |
-| RMS ↔ motion r (audio vs. baseline) | 0.16 vs. −0.11 | 0.21 vs. −0.15 | **0.58** vs. 0.15 |
+| **Onset ↔ motion r** (audio vs. baseline) | **0.76** vs. 0.00 | **0.36** vs. −0.12 | **0.42** vs. 0.01 |
+| RMS ↔ motion r (audio vs. baseline) | 0.33 vs. −0.07 | 0.43 vs. −0.15 | **0.69** vs. 0.15 |
+| **Kick-locked contrast** (audio vs. baseline) | 1.25× vs. 0.97× | **1.43×** vs. 0.84× | **1.85×** vs. 1.10× |
+| Snare-locked contrast (audio vs. baseline) | 1.07× vs. 0.99× | 1.20× vs. 0.80× | 1.21× vs. 0.89× |
+| Vocal-accent-locked contrast (audio vs. baseline) | (no vocals) | 0.96× vs. 0.93× | 1.44× vs. 0.92× |
 
 <p align="center">
   <img src="outputs/demo_track/figures/archetype.png" width="900" alt="Feature vector, archetype scores and instrument tags for the demo track">
@@ -267,7 +276,12 @@ Three 30 s clips: the demo track and two songs that are not in the repo (see [`s
 
 * On every clip, frame-to-frame motion follows the note/drum onsets more closely in the audio-driven video than in the baseline. That
   is the main sign that the synchronization works as designed. On *Drag Path* the best match is at 0 ms lag.
-* The effect is much stronger on the clean electronic demo than on the real pop songs, whose mixes are denser.
+* The effect is stronger on the clean electronic demo than on the real pop songs. On the real songs the sync improved a lot once
+  the drum track was split into kick, snare and hi-hats. Before that, every effect fired on every drum hit and every note onset,
+  including hi-hats and vocal syllables, so the accents a listener follows were buried in clutter. Naïka's onset correlation went from
+  0.21 to 0.36, and both songs now show a clear jump right on each kick (1.4–1.9× vs. about 1× for the baseline).
+* Snares get a smaller but visible reaction (a twist + flash, ~1.2×). Vocal accents only register on *Drag Path*: on Naïka the
+  vocals are almost continuous, so the slow glow barely changes from one frame to the next.
 * The three clips now get three different archetypes, and with them different media, palettes and motion. Inside *Drag Path*, the
   breakdown where drums and bass drop out is classified as *chill*, so the motion calms down there and picks up again after.
 * Images within one song can still look alike: sections 2–4 of Naïka barely change, because image-to-image at strength 0.6 keeps most
