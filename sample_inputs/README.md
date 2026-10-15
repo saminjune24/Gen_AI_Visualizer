@@ -7,13 +7,10 @@
 | `twenty_one_pilots_drag_path.mp3` | no (copyrighted) | 1:45–2:15 | Twenty One Pilots – *Drag Path*. Loud section → breakdown where drums and bass drop out (~1:57) → drums slam back in (~2:06). |
 
 The two songs are only on our own machines. To reproduce those runs, put your own copy of the song in this folder with the same
-file name and run, from the repo root:
+file name, then in the notebook's configuration cell set `SONG = "naika_barely_barely"` (or `"twenty_one_pilots_drag_path"`) and
+press **Run All**. The clip start times are already filled in.
 
-```bash
-.venv/bin/python tools/render_song.py sample_inputs/naika_barely_barely.mp3 --start 28
-.venv/bin/python tools/render_song.py sample_inputs/twenty_one_pilots_drag_path.mp3 --start 105
-```
-
-**Using your own song:** drop any `.wav`, `.mp3` or `.flac` file in here and pick a 30-second window with some contrast (a build-up,
-a drop or a breakdown gives the visualizer the most to react to). `demo_track.wav` is re-created automatically by the notebook if it
-is ever deleted.
+**Using your own song:** drop any `.wav`, `.mp3` or `.flac` file in here, add a line for it to `SAMPLE_SONGS` in the configuration
+cell (name, file, clip start in seconds) and set `SONG` to that name. Pick a 30-second window with some contrast: a build-up, a drop or
+a breakdown gives the visualizer the most to react to. `demo_track.wav` is re-created automatically by the notebook if it is ever
+deleted.
