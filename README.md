@@ -363,7 +363,10 @@ All in the configuration cell (section 3) of the notebook:
 ## How we built it
 
 We followed our architecture guide one milestone at a time (audio → features → sections → prompts → images → animation → baseline →
-evaluation), then iterated on the look after watching the results.
+evaluation), then iterated on the look after watching the results. Each iteration followed the same loop: render, measure, find what is
+wrong, change one thing, measure again. The notebook records every change where it happens as a short **Experiment note**
+(*measured → changed → result*), and section 18 collects all twelve in one table (e.g. onset aliasing, CLAP calibration, and splitting
+the drums into kick / snare / hi-hats).
 
 ---
 
