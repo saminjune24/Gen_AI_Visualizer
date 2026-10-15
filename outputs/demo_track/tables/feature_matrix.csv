@@ -1,0 +1,10 @@
+feature,measured,class
+tempo,117.5 BPM,
+tonality,"A minor (fit r = 0.90, major-minor gap 0.30)",minor: moody / tense
+transient density,4.7 drum hits/s,
+transient sharpness,15.3 dB crest factor,
+grid tightness,0.87,tight / quantized
+rhythmic drive,,driving
+brightness,1645 Hz spectral centroid,balanced
+stem energy shares,"drums 74%, bass 17%, other 9%, vocals 0%",drum/bass-led
+energy / dynamics,"-23.8 dBFS mean, 18.4 dB range",

@@ -1,7 +1,9 @@
-property,measured,visual result
-tempo,117.5 BPM,8-pointed star
-key / mode,A minor (r = 0.90),sharp angular shards
-drum share of stems,50%,concentric tunnel rings
-top instruments (CLAP),"drums, synthesizer",hammered metal plates and glowing circuit traces
-vibe,dark,theme / palette (section 10)
+property,measured,used for
+archetype,party (runner-up groove),artistic medium (prompt) + motion profile (section 9.4)
+tonality,A minor,colour palette family (prompt)
+brightness,balanced (1645 Hz),palette brightness + lighting (prompt)
+rhythmic drive,"driving (4.7 hits/s, 15.3 dB crest)",subject geometry (prompt)
+stem dominance,drum/bass-led,palette accent (prompt)
+lyrics,-,-
+tempo,117.5 BPM,8-fold symmetry
 audio fingerprint,seed 478433,section seeds 478434..478437

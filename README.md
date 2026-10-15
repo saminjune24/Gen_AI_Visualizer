@@ -1,7 +1,7 @@
 # Section-Aware Procedural GenAI Audio Visualizer
 
 We built a music visualizer in a single Jupyter notebook. It listens to a 30-second music clip, works out what is going on in it
-(beats, bass, instruments, vibe, where the song changes), asks a text-to-image model to paint a few abstract images that match the
+(beats, bass, instruments, key, what kind of track it is, where the song changes), asks a text-to-image model to paint a few abstract images that match the
 song, and then animates those images frame by frame so that they move with the music. The output is an MP4 with the original audio.
 
 To check whether the audio actually matters, the notebook also renders a **baseline**: the same images and the same effects, but driven
@@ -43,7 +43,7 @@ Gen_AI_Visualizer/
 │   │   ├── videos/               ← visualizer.mp4 (audio-driven) and baseline.mp4
 │   │   ├── images/               ← the generated section images
 │   │   ├── figures/              ← every plot from the notebook
-│   │   └── tables/               ← sections, prompts, vibe/shape choices, beat changes, instrument events, metrics, survey template
+│   │   └── tables/               ← feature matrix, archetype profiles, prompts, sections, beat changes, instrument events, metrics, survey template
 │   ├── naika_barely_barely/      ← same layout (no videos in the repo: they contain copyrighted audio)
 │   └── twenty_one_pilots_drag_path/
 ```
@@ -94,7 +94,7 @@ SAMPLE_SONGS = {   # name: (file, clip start in seconds)
 SONG = "my_song"
 ```
 
-Results land in `outputs/my_song/`. In the same cell, `VIBE_OVERRIDE = "dark"` forces a vibe and `VISUAL_STYLE = "modes"` switches to
+Results land in `outputs/my_song/`. In the same cell, `ARCHETYPE_OVERRIDE = "chill"` forces an archetype and `VISUAL_STYLE = "modes"` switches to
 the alternative visual style. Tip: pick a 30-second window with some contrast (a build-up, a drop or a breakdown), because that is what
 the section and beat-change detection reacts to.
 
@@ -116,8 +116,8 @@ The notebook runs in six parts: **A** audio analysis → **B** song understandin
 ```
 audio clip
   ├─► A. features (beats, onsets, RMS, brightness, bass/mid/high) + instrument stems ─► frame-level control timeline (24 fps)
-  ├─► B. sections, vibe, song "signature", dramatic beat changes, instrument entrances/exits
-  ├─► C. one text prompt per section ─► SD-Turbo ─► 3–4 images ─► split into movable parts
+  ├─► B. sections, feature matrix → archetype, dramatic beat changes, per-section behaviour profiles
+  ├─► C. one 4-part prompt per section (medium, subject, palette, lighting) ─► SD-Turbo ─► 3–4 images ─► movable parts
   ├─► D. renderer: every frame warps/recolours the images from the timeline ─► MP4 + original audio
   └─► E. same renderer with fixed timers (baseline) ─► alignment metrics + survey design
 ```
@@ -137,32 +137,60 @@ A couple of things we were careful about: spectral centroid is a **brightness** 
 perceived loudness. Onset spikes are only 1–2 analysis frames wide, so we take the local maximum before resampling to 24 fps; otherwise
 many of them fall between video frames and disappear.
 
-### B. Song understanding (sections 8–9.3)
+### B. Song understanding (sections 8–9.4)
 
 * **Analysis sections.** We build an "activity" curve (`0.5·RMS + 0.3·onset + 0.2·bass`), smooth it, and put section boundaries at
   its biggest jumps (at least 4.5 s apart), giving 3–4 sections. If that fails, the clip is split into equal parts. We call them
   "Section 1, 2, …" because the detector finds change points, not verses or choruses.
-* **Vibe** (party / happy / chill / melancholic / dark / epic / bittersweet). Three opinions are combined:
-  1. an **acoustic profile** in the spirit of what an audio engineer listens for: tempo, how hard the hits are, how compressed the mix
-     is, brightness, major vs. minor key, loudness and noisiness, each scaled to 0–1 and matched against a hand-written profile for
-     each vibe;
-  2. **CLAP**, a pretrained audio-text model, scoring the clip against a text description of each vibe (zero-shot);
-  3. **lyrics**: Whisper transcribes the separated vocals and a sentiment model rates them. If the audio says party/happy but the lyrics
-     are mostly negative, the song is called *bittersweet*.
+* **Audio-to-semantic feature matrix.** The things an audio engineer listens for, measured and put into classes:
 
-  The final vibe is 50 % acoustic + 50 % CLAP, then the lyrics rule. It sets the colour theme of every prompt.
-* **Song signature.** Song-level properties that change the *shapes*, not just the colours: tempo → number of star points (5–12),
-  major/minor → rounded petals vs. sharp shards, how drum-heavy the song is → tunnel rings vs. spiral arms, the top two instruments
-  from CLAP → materials (e.g. distorted guitar → shattered glass, strings → silk ribbons), and a fingerprint of the audio → the random seed.
+  | Feature | Measured as | Classes |
+  |---|---|---|
+  | Tonality | key estimate from a pitch-class profile (chroma) of the mix without drums | major (bright, open) vs minor (moody, tense) |
+  | Transients | drum hits per second + crest factor (peak ÷ RMS) of the drum stem | rhythmic drive: driving / groove / sustained |
+  | Grid tightness | how close drum hits land to a 16th-note grid from the beat tracker | tight (programmed) vs loose (live) |
+  | Brightness | mean spectral centroid | dark/warm < 1.5 kHz ≤ balanced < 3.5 kHz ≤ airy/bright |
+  | Stem dominance | share of energy per Demucs stem | vocal-led / drum-bass-led / ambient-pad-led / balanced |
+  | Energy, dynamics, distortion | loudness, dynamic range, spectral flatness | — |
+
+* **Archetype.** Twelve of those features (scaled 0–1) are matched against hand-written prototypes for eight archetypes: **party**
+  (EDM / club), **euphoric** (upbeat pop), **chill** (lofi / ambient), **melancholic** (introspective acoustic), **dark_synth** (dark
+  synthwave), **aggressive** (metal / trap), **groove** (funk / house) and **cinematic** (epic / orchestral). CLAP, a pretrained audio-text
+  model, scores the clip against a one-line description of each, and the two opinions are averaged 50/50. Two calibration details mattered:
+  CLAP is very confident (80 %+ on one label), so its scores are softened with a temperature of 2, and the eight descriptions are worded
+  in parallel, because when only one of them said "pop *song*", CLAP picked it for every track with vocals.
+* **Lyrics as a modifier.** Whisper transcribes the separated vocals and a sentiment model rates them. An upbeat archetype with mostly
+  negative lyrics is flagged **bittersweet**, which shifts the palette towards cold blue.
 * **Dramatic beat changes.** At each section boundary we compare 3 s before and after (drum level, drum-hit rate, bass level, tempo).
-  If the biggest change is ≥ 0.5, that section gets a completely new image with a different shape family
-  (tunnel, sunburst, crystal, vortex, flower or flowing waves) instead of evolving from the previous one.
+  If the biggest change is ≥ 0.5, that section starts a completely new image instead of evolving from the previous one.
+* **Behaviour profiles.** Every archetype has a motion profile: a set of overrides for the animation settings. Each section blends the
+  profiles of its top two archetypes, using 60 % the song's scores and 40 % the section's own sound, so a quiet breakdown inside an
+  upbeat song can lean towards *chill*. The settings morph frame by frame during transitions, so the motion style changes without a cut.
+
+  | Profile | What it looks like |
+  |---|---|
+  | party | hard 15 % beat zoom, 8–12 mirror segments, fast full-wheel colour changes, sharp white flashes, high contrast |
+  | euphoric | bouncy, bright and saturated, moderate flashes |
+  | chill | slow drift, gentle camera sway, only 4–6 segments, brightness breathes with loudness, no flashes, palette stays put |
+  | melancholic | minimal: slow rotation, muted saturation, very fine ripples, long 3.5 s transitions |
+  | dark_synth | moody and steady: high contrast, slow colour drift, deep swirl |
+  | aggressive | chaotic: the image shatters into 12×12 tiles and spins erratically on drum hits, lots of jittery particles |
+  | groove | bouncy: the centre swells with the bass, thick stretching lines, swinging camera |
+  | cinematic | deep: fast continuous zoom, big swirling transitions, slow brightness swells, dusty particles |
 
 ### C. Generative images (sections 10–11.1)
 
-* **Prompts** are built from three pieces: the section's shape + the song's form and materials, the vibe's colour theme, and short
-  phrases for the section's energy, bass, mid and high levels (low / medium / high at 1/3 and 2/3). SD-Turbo only reads 77 tokens, so
-  the notebook checks that no prompt is cut off.
+* **Prompts** are built from four components, each picked by a documented rule:
+
+  | Component | Chosen by | Examples |
+  |---|---|---|
+  | Artistic medium | archetype | party → *retro-futuristic cyberpunk neon vector art*; chill → *grainy pastel risograph illustration*; melancholic → *chiaroscuro oil painting, muted charcoal* |
+  | Subject & geometry | section energy × section rhythm | high + driving → *intricate mandala of fractured crystal prisms*; low + sustained → *drifting liquid nebula with botanical flora* |
+  | Colour palette | key mode × brightness, + an accent from the dominant stem | minor + dark → *deep indigo, midnight obsidian, teal accents*; major + bright → *radiant amber, electric magenta, sun-drenched gold* |
+  | Lighting & texture | section brightness × how irregular the onsets are | dark → *volumetric fog, soft bioluminescence*; bright → *laser bloom, crisp specular highlights* |
+
+  Plus a fixed `N-fold symmetry, centered on dark background` so the renderer can animate the image around its centre. Each component is
+  one short phrase: SD-Turbo reads at most 77 tokens and responds best to a few concrete words, and the notebook checks no prompt is cut off.
 * **SD-Turbo** (a distilled Stable Diffusion 2.1) makes 512×512 images in 2 steps, about 6 s each on a MacBook. Section 1 is
   generated from text; later sections are generated **image-to-image from the previous section** (strength 0.6) so the artwork evolves,
   except after a dramatic beat change, where it starts fresh. Every prompt, seed and setting is saved to `tables/prompts.csv`.
@@ -181,24 +209,26 @@ inspectable formulas. The default **psychedelic** style:
 | Effect | What you see | Driven by |
 |---|---|---|
 | Endless zoom | the view keeps zooming into the pattern; new rings keep appearing from the centre | speed: loudness; surges on every beat |
-| Beat zoom punch | the view punches in ~10 % on every beat and eases back | beats |
+| Beat zoom punch | the view punches in on every beat (2–15 % depending on the profile) and eases back | beats |
 | Kaleidoscope | the image is folded into mirrored wedges that rotate and slide | wedges: mid band; sliding: "other" instruments |
 | Instruments in the design | core / inner star / outer ring lines glow **orange / magenta / cyan** as loud as **bass / vocals / other**; a ring blooms when its instrument enters; the number of mirror segments changes when instruments enter or leave | instrument stems + entrances/exits |
 | Light spots | the image's bright spots flare and change colour | drum hits |
-| Colour cycling | the whole frame slowly rotates through the rainbow | speed: loudness; small step on drum hits |
-| Morph transitions | the next section's image melts in (brightest parts first) with a swirl; no hard cuts | 2.5 s normally, 1.5 s at a dramatic beat change |
+| Colour cycling | colours swing around the image's own palette: across the whole wheel for *party*, barely at all for *melancholic* | speed: loudness; a step on drum hits |
+| Morph transitions | the next section's image melts in (brightest parts first) with a swirl; no hard cuts | length from the section's profile (1–3.5 s), shorter at a dramatic beat change |
+| Profile extras | tile shatter + erratic spins (*aggressive*), camera sway (*chill*, *groove*), centre swelling with the bass, thick lines (*groove*) | behaviour profile |
 | Brightness, saturation, sharpness, particles, flashes | overall intensity and detail | RMS, spectral centroid, high band, onsets |
 
 Event effects (beats, hits) swell in over about 2 frames instead of one, because single-frame jumps looked like cuts. Finally, FFmpeg
 adds the original audio back and the notebook checks that the video and audio are both exactly 30 s.
 
-**Visual styles.** `--style modes` (or `VISUAL_STYLE=modes`) switches to an alternative where each shape family has its own motion:
+**Visual styles.** `VISUAL_STYLE = "modes"` switches to an alternative where each shape family has its own motion:
 kaleidoscope, zoom, shockwave, shatter, spin, sway and liquid flow.
 
 ### E. Evaluation (sections 15–17)
 
-* **Baseline.** Same song, images, renderer and effect types. Every continuous control is a constant mid value, pulses repeat on a
-  fixed 0.7 s timer (deliberately not the song's tempo), sections change at equal time intervals and no instrument changes happen.
+* **Baseline.** Same song, images, renderer and effect types, and the song-level behaviour profile held constant. Every continuous
+  control is a constant mid value, pulses repeat on a fixed 0.7 s timer (deliberately not the song's tempo), sections change at equal
+  time intervals, and no instrument changes or profile switches happen.
 * **Technical checks** on the *rendered frames*, not on our own parameters (correlating RMS with a brightness setting computed from RMS
   would just be true by construction):
   * visual motion energy = mean absolute difference between consecutive frames;
@@ -219,18 +249,29 @@ Three 30 s clips: the demo track and two songs that are not in the repo (see [`s
 | | Demo track | Naïka – *BARELY, BARELY* (0:28–0:58) | Twenty One Pilots – *Drag Path* (1:45–2:15) |
 |---|---|---|---|
 | Tempo / key | 117.5 BPM, A minor | 136 BPM, D# major | 96 BPM, E major |
-| Vibe | dark | bittersweet (audio says *happy*, lyrics mostly negative) | epic |
-| Shapes per section | star → sunburst → tunnel → crystal | star → crystal → crystal → crystal | star → waves → waves → tunnel |
+| Rhythm / brightness / stems | driving, balanced, drum/bass-led | groove, balanced, drum/bass-led | groove, dark, ambient/pad-led |
+| **Archetype** (runner-up) | **party** (groove) | **groove** (euphoric) + bittersweet lyrics | **euphoric** (cinematic) |
+| Section profiles | dark_synth → groove → party → dark_synth | euphoric → groove → groove → groove | euphoric → **chill → chill** (breakdown) → euphoric |
+| Medium | retro-futuristic cyberpunk neon vector art | retro 70s funk poster, bold screen print | vibrant pop-art illustration, glossy render |
+| Palette | violet, deep teal and silver | coral, turquoise and warm gold, fading into cold blue | warm amber, burgundy and soft gold |
 | Dramatic beat changes | 8.0 s, 16.4 s, 24.0 s | 9.0 s | 11.3 s, 21.1 s |
 | Instrument changes | 5 | 21 | 9 |
-| **Onset ↔ motion r** (audio vs. baseline) | **0.63** vs. −0.21 | **0.18** vs. −0.12 | **0.29** vs. 0.05 |
-| RMS ↔ motion r (audio vs. baseline) | 0.04 vs. −0.30 | 0.14 vs. −0.28 | **0.70** vs. 0.32 |
+| **Onset ↔ motion r** (audio vs. baseline) | **0.66** vs. −0.01 | **0.21** vs. −0.13 | **0.41** vs. 0.01 |
+| RMS ↔ motion r (audio vs. baseline) | 0.16 vs. −0.11 | 0.21 vs. −0.15 | **0.58** vs. 0.15 |
+
+<p align="center">
+  <img src="outputs/demo_track/figures/archetype.png" width="900" alt="Feature vector, archetype scores and instrument tags for the demo track">
+</p>
 
 **What we take from this:**
 
 * On every clip, frame-to-frame motion follows the note/drum onsets more closely in the audio-driven video than in the baseline. That
   is the main sign that the synchronization works as designed. On *Drag Path* the best match is at 0 ms lag.
 * The effect is much stronger on the clean electronic demo than on the real pop songs, whose mixes are denser.
+* The three clips now get three different archetypes, and with them different media, palettes and motion. Inside *Drag Path*, the
+  breakdown where drums and bass drop out is classified as *chill*, so the motion calms down there and picks up again after.
+* Images within one song can still look alike: sections 2–4 of Naïka barely change, because image-to-image at strength 0.6 keeps most
+  of the previous composition when the prompts are similar.
 * **Ground-truth check on the demo:** we know the kick and bass enter at 8 s and leave at 24 s, and the detector finds exactly those
   instrument changes. The 16 s boundary (hi-hats join) is a borderline case: its change score is exactly at the 0.5 threshold, and
   tiny differences in the instrument separation flip it between "dramatic" and "smooth".
@@ -253,7 +294,7 @@ These are implementation checks, not proof that people *perceive* better synchro
 |---|---|---|
 | `stabilityai/sd-turbo` | section images (text-to-image and image-to-image) | 512×512, 2–4 steps; check the Stability AI community license before publishing images |
 | Demucs `htdemucs` | splitting drums / bass / vocals / other | runs on CPU (Apple MPS lacks an operation it needs), ~15 s per clip |
-| `laion/clap-htsat-unfused` | zero-shot vibe and instrument tags | averaged over 10 s windows |
+| `laion/clap-htsat-unfused` | zero-shot archetype and instrument tags | averaged over 10 s windows; softmax temperature 2 |
 | `openai/whisper-small` | transcribing the vocal track | can mishear sung lyrics (it heard "drag path" as "dry path") |
 | `cardiffnlp/twitter-roberta-base-sentiment-latest` | positive / neutral / negative lyrics | we first tried a DistilBERT model, but it crashed on our Mac with PyTorch 2.14 |
 
@@ -269,11 +310,14 @@ All in the configuration cell (section 3) of the notebook:
 |---|---|---|
 | `SONG`, `SAMPLE_SONGS` | `"demo_track"` | which input file to use and where its 30 s clip starts |
 | `VISUAL_STYLE` | `psychedelic` | or `modes` for one motion style per shape family |
-| `VIBE_OVERRIDE` | auto | force a vibe |
+| `ARCHETYPE_OVERRIDE` | auto | force an archetype (party, euphoric, chill, melancholic, dark_synth, aggressive, groove, cinematic) |
+| `SECTION_PROFILE_WEIGHT` | 0.4 | how far a section's own sound can pull its motion profile away from the song's |
+| `CLAP_TEMPERATURE` | 2.0 | how much CLAP's confidence is softened before averaging with the acoustic profile |
+| `PROFILES` (section 9.4) | — | the eight behaviour profiles; edit these to change how each archetype moves |
 | `N_SECTIONS`, `MIN_SECTION_SEC` | 4, 4.5 s | how many analysis sections, and their minimum length |
 | `DRAMATIC_THRESHOLD` | 0.5 | how big a beat change must be to switch to a new image and shape |
 | `IMG2IMG_STRENGTH` | 0.6 | how much each section's image may differ from the previous one |
-| `VIS["beat_zoom_amp"]`, `VIS["zoom_speed_beat"]` | 0.10, 0.9 | how hard the zoom reacts to beats |
+| `VIS` | — | default animation settings (the profiles override a subset of them) |
 | `VIS["soft_attack_sec"]` | 0.12 s | how gently hits swell in (lower = punchier, higher = smoother) |
 | `FORCE_REGENERATE` | `False` | regenerate images even if cached ones exist |
 
@@ -281,22 +325,23 @@ All in the configuration cell (section 3) of the notebook:
 
 ## Limitations
 
-* **Nothing here is trained or validated on labelled data.** The vibe profiles, thresholds and visual mappings are design choices that
-  we tuned by eye on three clips. A CNN on mel-spectrograms or an LSTM over time would need a dataset of songs labelled by vibe, which we
-  don't have, so CLAP stands in as the pretrained model.
+* **Nothing here is trained or validated on labelled data.** The archetype prototypes, behaviour profiles, thresholds and visual
+  mappings are design choices that we tuned by eye on three clips. A CNN on mel-spectrograms or an LSTM over time would need a dataset of
+  songs labelled by archetype, which we don't have, so CLAP stands in as the pretrained model. Real songs also mix archetypes, which is
+  why each section blends two profiles.
 * **Features are proxies.** Beat tracking can lock onto half or double tempo, the key estimate can be wrong for ambiguous harmony, and
   instrument separation leaks between tracks ("other" lumps several instruments together).
 * **The frequency-to-size mapping** (big, slow shapes for bass, small, fast detail for highs) is inspired by wavelength, but the shapes
   don't physically represent sound waves.
 * **Sections are change points**, not verses or choruses, and dramatic changes are only checked at section boundaries.
-* **SD-Turbo follows prompts loosely**, especially material words like "silk" or "smoke".
+* **SD-Turbo follows prompts loosely**: it picks up the medium and palette well, the subject words less reliably.
 * **Three clips is a tiny test set.** The real-song results are much weaker than the demo's, and the survey has not been run.
 
 ## Future work
 
 * Run the survey and report the paired comparison.
-* Try more songs and genres, ideally with a few hand-labelled vibes to check the classifier against.
-* Train a small vibe classifier on CLAP embeddings once labelled data exists, and let the vibe change during the song.
+* Try more songs and genres, ideally with a few hand-labelled archetypes to check the classifier against.
+* Train a small archetype classifier on CLAP embeddings once labelled data exists.
 * Use segmentation masks (e.g. Segment Anything) to animate arbitrary objects in an image, not just rings around the centre.
 
 ---

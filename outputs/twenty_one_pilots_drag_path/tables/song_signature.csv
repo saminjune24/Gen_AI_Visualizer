@@ -1,7 +1,9 @@
-property,measured,visual result
-tempo,95.7 BPM,6-pointed star
-key / mode,E major (r = 0.87),rounded petal shapes
-drum share of stems,16%,swirling spiral arms
-top instruments (CLAP),"voice, strings",soft smoke wisps and flowing silk ribbons
-vibe,epic,theme / palette (section 10)
+property,measured,used for
+archetype,euphoric (runner-up cinematic),artistic medium (prompt) + motion profile (section 9.4)
+tonality,E major,colour palette family (prompt)
+brightness,dark (1453 Hz),palette brightness + lighting (prompt)
+rhythmic drive,"groove (2.1 hits/s, 15.1 dB crest)",subject geometry (prompt)
+stem dominance,ambient/pad-led,palette accent (prompt)
+lyrics,-,-
+tempo,95.7 BPM,6-fold symmetry
 audio fingerprint,seed 537703,section seeds 537704..537707

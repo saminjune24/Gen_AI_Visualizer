@@ -1,0 +1,10 @@
+feature,measured,class
+tempo,95.7 BPM,
+tonality,"E major (fit r = 0.87, major-minor gap 0.14)",major: bright / uplifting
+transient density,2.1 drum hits/s,
+transient sharpness,15.1 dB crest factor,
+grid tightness,0.73,tight / quantized
+rhythmic drive,,groove
+brightness,1453 Hz spectral centroid,dark
+stem energy shares,"drums 24%, bass 30%, other 33%, vocals 12%",ambient/pad-led
+energy / dynamics,"-12.2 dBFS mean, 10.4 dB range",

@@ -1,7 +1,9 @@
-property,measured,visual result
-tempo,136.0 BPM,10-pointed star
-key / mode,D# major (r = 0.57),rounded petal shapes
-drum share of stems,27%,swirling spiral arms
-top instruments (CLAP),"voice, drums",soft smoke wisps and hammered metal plates
-vibe,bittersweet,theme / palette (section 10)
+property,measured,used for
+archetype,groove (runner-up euphoric),artistic medium (prompt) + motion profile (section 9.4)
+tonality,D# major,colour palette family (prompt)
+brightness,balanced (1783 Hz),palette brightness + lighting (prompt)
+rhythmic drive,"groove (2.9 hits/s, 13.3 dB crest)",subject geometry (prompt)
+stem dominance,drum/bass-led,palette accent (prompt)
+lyrics,bittersweet,palette fades into cold blue
+tempo,136.0 BPM,10-fold symmetry
 audio fingerprint,seed 889769,section seeds 889770..889773
