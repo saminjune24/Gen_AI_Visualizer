@@ -304,8 +304,7 @@ All in the configuration cell (section 3) of the notebook:
 ## How we built it
 
 We followed our architecture guide one milestone at a time (audio → features → sections → prompts → images → animation → baseline →
-evaluation), then iterated on the look after watching the results. Most of the code was written with an AI coding assistant
-(Claude Code).
+evaluation), then iterated on the look after watching the results.
 
 ---
 
