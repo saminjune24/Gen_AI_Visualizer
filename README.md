@@ -1,374 +1,258 @@
 # Section-Aware Procedural GenAI Audio Visualizer
 
-We built a music visualizer in a single Jupyter notebook. It listens to a 30-second music clip, works out what is going on in it
-(beats, bass, instruments, key, what kind of track it is, where the song changes), asks a text-to-image model to paint a few abstract images that match the
-song, and then animates those images frame by frame so that they move with the music. The output is an MP4 with the original audio.
+A music visualizer built in a single Jupyter notebook. It listens to a 30-second clip, works out what is happening in it (beats,
+instruments, key, mood, where the song changes), generates a few abstract images that match the song, and animates them frame by
+frame so they move with the music. The output is an MP4 with the original audio.
 
-To check whether the audio actually matters, the notebook also renders a **baseline**: the same images and the same effects, but driven
-by fixed timers instead of the music. We compare the two with measurements on the rendered frames, and we include a survey design for
-comparing them with real viewers.
+Final project for MSDS 466 (Applied Generative AI for Enterprises), by Samin Bahizad and Wendy Zhang.
 
 <p align="center">
   <img src="outputs/demo_track/figures/section_images.png" width="900" alt="The four generated section images for the demo track">
 </p>
 
-**Watch the demo:** [`outputs/demo_track/videos/visualizer.mp4`](outputs/demo_track/videos/visualizer.mp4) (audio-driven) vs.
-[`outputs/demo_track/videos/baseline.mp4`](outputs/demo_track/videos/baseline.mp4) (not audio-driven). GitHub does not play video
-inline: open the file and click **View raw** (or download it) to watch it with sound.
-
----
+**Demo:** [`visualizer.mp4`](outputs/demo_track/videos/visualizer.mp4) (audio-driven) vs. [`baseline.mp4`](outputs/demo_track/videos/baseline.mp4)
+(not audio-driven). GitHub does not play video inline, so click **View raw** or download the file to watch it with sound.
 
 ## Research question
 
-> Can audio-derived features be used to guide generative artwork and procedural animation to create a visualization that feels more
-> synchronized and connected to the music than a non-audio-conditioned visualizer?
+> Can audio-derived features guide generative artwork and animation so that the result feels more synchronized and connected to the
+> music than a visualizer that ignores the audio?
 
-**Hypothesis:** the audio-conditioned visualizer will get higher ratings for synchronization and connection to the music than the
-non-audio-conditioned baseline.
+**Hypothesis:** the motion in the audio-driven visualizer will line up with the music more closely than the baseline's.
 
----
+The **baseline** uses the same images and effects, but runs them on fixed timers instead of the music. We compare the two with
+measurements on the rendered frames (see [Evaluation](#evaluation)).
 
 ## Repository layout
 
 ```
 Gen_AI_Visualizer/
-├── README.md                     ← you are here
-├── genai_audio_visualizer.ipynb  ← the whole project: run top to bottom (saved with the demo-track outputs)
+├── genai_audio_visualizer.ipynb  ← the whole project, run top to bottom
 ├── requirements.txt
-├── sample_inputs/
-│   ├── README.md                 ← which clips we used and why
-│   └── demo_track.wav            ← license-free 30 s track we synthesized (songs are kept local, see below)
-├── outputs/
-│   ├── demo_track/               ← one folder per song, same layout for every run
-│   │   ├── videos/               ← visualizer.mp4 (audio-driven) and baseline.mp4
-│   │   ├── images/               ← the generated section images
-│   │   ├── figures/              ← every plot from the notebook
-│   │   └── tables/               ← feature matrix, archetype profiles, prompts, sections, beat changes, instrument events, metrics, survey template
-│   ├── naika_barely_barely/      ← same layout (no videos in the repo: they contain copyrighted audio)
-│   └── twenty_one_pilots_drag_path/
+├── sample_inputs/                ← input clips (see sample_inputs/README.md)
+└── outputs/<song>/               ← one folder per song
+    ├── videos/                   ← visualizer.mp4 and baseline.mp4
+    ├── images/                   ← generated section images
+    ├── figures/                  ← plots from the notebook
+    └── tables/                   ← features, prompts, sections, metrics, test report
 ```
 
-Everything (the code, the explanations and the plots) is in the notebook. There are no separate scripts.
-
-Each run also creates `outputs/<song>/cache/` (the clip audio and the separated instruments). It is git-ignored because it can be
-recreated.
-
----
+There are no separate scripts. The two real songs are copyrighted, so their audio and videos are not in the repo. Each run also
+creates a git-ignored `cache/` folder with the clip audio and separated instruments.
 
 ## Quick start
-
-### 1. Set up the environment (macOS / Linux)
 
 ```bash
 python3.13 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-```
-
-No system FFmpeg is needed (`imageio-ffmpeg` ships its own). Image generation uses an NVIDIA GPU if there is one, the Apple-silicon GPU
-(MPS) on a Mac, and the CPU otherwise. The first run downloads about 4.5 GB of pretrained models: SD-Turbo (~2.5 GB), CLAP (~600 MB),
-Whisper-small (~1 GB), a RoBERTa sentiment model (~500 MB) and Demucs (~80 MB).
-
-### 2. Run the demo
-
-Open `genai_audio_visualizer.ipynb` in Jupyter Lab or VS Code (with the `.venv` kernel) and run all cells, or headless:
-
-```bash
 .venv/bin/jupyter nbconvert --to notebook --execute --inplace genai_audio_visualizer.ipynb
 ```
 
-A full run takes about 3 minutes on an M-series MacBook (the first run is slower because of the model downloads). The generated images
-are cached, so re-running does not regenerate them unless the prompts change.
+You can also open the notebook in Jupyter Lab or VS Code with the `.venv` kernel and run all cells. No system FFmpeg is needed.
+It uses an NVIDIA GPU, an Apple-silicon GPU or the CPU, whichever is available.
 
-### 3. Run it on another song
+The first run downloads about 4.5 GB of models. After that, a full run takes about 3 minutes on an M-series MacBook. Generated images
+are cached and only regenerated when the prompts change.
 
-Everything is controlled from the **configuration cell (section 3)** of the notebook. To switch songs, change one line and press
-**Run All**:
+**Using another song:** put the file in `sample_inputs/`, add it to `SAMPLE_SONGS` in the configuration cell (section 2) and set `SONG`:
 
 ```python
 SAMPLE_SONGS = {   # name: (file, clip start in seconds)
-    "demo_track":                  ("sample_inputs/demo_track.wav", 0),
-    "naika_barely_barely":         ("sample_inputs/naika_barely_barely.mp3", 28),
-    "twenty_one_pilots_drag_path": ("sample_inputs/twenty_one_pilots_drag_path.mp3", 105),
-    "my_song":                     ("sample_inputs/my_song.mp3", 45),     # ← add your own like this
+    "demo_track": ("sample_inputs/demo_track.wav", 0),
+    "my_song":    ("sample_inputs/my_song.mp3", 45),
 }
 SONG = "my_song"
 ```
 
-Results land in `outputs/my_song/`. In the same cell, `ARCHETYPE_OVERRIDE = "chill"` forces an archetype and `VISUAL_STYLE = "modes"` switches to
-the alternative visual style. Tip: pick a 30-second window with some contrast (a build-up, a drop or a breakdown), because that is what
-the section and beat-change detection reacts to.
-
-The demo track is generated by the notebook itself; the two songs we tested are copyrighted, so they are not in the repo. Put your own
-copy in `sample_inputs/` with the file name above to reproduce those runs.
-
-### Google Colab
-
-Upload the notebook and `sample_inputs/demo_track.wav`, pick **Runtime → Change runtime type → T4 GPU**, and run all. The first code cell
-installs the packages Colab does not already have.
-
----
+Results go to `outputs/my_song/`. Pick a 30-second window with some contrast (a build-up, drop or breakdown), since that is what the
+section detection reacts to.
 
 ## How it works
 
-The notebook runs in six parts: **A** audio analysis → **B** song understanding → **C** image generation → **D** animation → **E** evaluation
-→ **F** wrap-up. Every tunable number lives in one configuration cell (section 3), so nothing is hidden in the code.
-
-```
-audio clip
-  ├─► A. features (beats, onsets, RMS, brightness, bass/mid/high) + instrument stems ─► frame-level control timeline (24 fps)
-  ├─► B. sections, feature matrix → archetype, dramatic beat changes, per-section behaviour profiles
-  ├─► C. one 4-part prompt per section (medium, subject, palette, lighting) ─► SD-Turbo ─► 3–4 images ─► movable parts
-  ├─► D. renderer: every frame warps/recolours the images from the timeline ─► MP4 + original audio
-  └─► E. same renderer with fixed timers (baseline) ─► alignment metrics + survey design
-```
-
-### A. Audio analysis (notebook sections 4–7.1)
-
-| Step | What we do | Tools |
+| Part | Notebook sections | What happens |
 |---|---|---|
-| Load | 30 s clip, mono, 22,050 Hz | librosa |
-| Features | onset strength (spectral flux), beat times + tempo, RMS energy, spectral centroid, energy in three bands: bass 20–250 Hz, mid 250–2000 Hz, high 2000–8000 Hz | librosa, NumPy |
-| Instruments | split the clip into **drums, bass, vocals and "other"** (synths, guitars, keys), then detect the drum hits on the drum track alone | Demucs `htdemucs` |
-| Drum elements | classify every drum hit as **kick** (≥ 50 % of its energy below 150 Hz), **hi-hat** (very bright, no low end) or **snare / clap** (everything else), and find **vocal accents** (onsets on the vocal track, merged into phrases) | librosa |
-| Clean-up | 0.25 s rolling mean, then clip each feature to its 5th–95th percentile and scale it to 0–1 | SciPy |
-| Control timeline | resample everything to one row per video frame (720 rows for 30 s at 24 fps); beats and hits become short decaying pulses | pandas |
-| Instrument activity | each instrument is switched on/off (with hysteresis and a 2 s minimum) → a list of entrances and exits | — |
+| **A. Audio analysis** | 3–8 | Extract beats, energy, brightness and bass/mid/high levels. Split the clip into drums, bass, vocals and other instruments (Demucs), and label each drum hit as kick, snare or hi-hat. Resample everything to one row per video frame (24 fps). |
+| **B. Song understanding** | 9–14 | Find 3–4 sections where the music changes. Classify the song into one of eight archetypes (party, euphoric, chill, melancholic, dark_synth, aggressive, groove, cinematic). Flag big beat changes between sections. Give each section a motion profile. |
+| **C. Images** | 15–17 | Build one prompt per section and generate 3–4 images with SD-Turbo. Split each image into parts (core, inner star, outer ring, line art, light spots) that can move separately. |
+| **D. Animation** | 18–21 | Animate the images from the per-frame timeline and add the original audio back. |
+| **E. Evaluation** | 22–25 | Render the baseline, measure audio–visual alignment, and test the analysis against the demo track's known answers. |
+| **F. Wrap-up** | 26–28 | Results summary, test report and conclusion. |
 
-A couple of things we were careful about: spectral centroid is a **brightness** measure, not pitch, and RMS is an **energy** measure, not
-perceived loudness. Onset spikes are only 1–2 analysis frames wide, so we take the local maximum before resampling to 24 fps; otherwise
-many of them fall between video frames and disappear.
+All settings are in the configuration cell (section 2). Every `check(...)` line in the notebook is a test that prints `[PASS]`,
+`[WARN]` or `[FAIL]`. Pipeline tests stop the run when something is broken; quality tests only warn. Section 27 collects them in
+`tables/test_report.csv`.
 
-### B. Song understanding (sections 8–9.4)
+### Song understanding
 
-* **Analysis sections.** We build an "activity" curve (`0.5·RMS + 0.3·onset + 0.2·bass`), smooth it, and put section boundaries at
-  its biggest jumps (at least 4.5 s apart), giving 3–4 sections. If that fails, the clip is split into equal parts. We call them
-  "Section 1, 2, …" because the detector finds change points, not verses or choruses.
-* **Audio-to-semantic feature matrix.** The things an audio engineer listens for, measured and put into classes:
+The archetype comes from two sources averaged 50/50:
 
-  | Feature | Measured as | Classes |
-  |---|---|---|
-  | Tonality | key estimate from a pitch-class profile (chroma) of the mix without drums | major (bright, open) vs minor (moody, tense) |
-  | Transients | drum hits per second + crest factor (peak ÷ RMS) of the drum stem | rhythmic drive: driving / groove / sustained |
-  | Grid tightness | how close drum hits land to a 16th-note grid from the beat tracker | tight (programmed) vs loose (live) |
-  | Brightness | mean spectral centroid | dark/warm < 1.5 kHz ≤ balanced < 3.5 kHz ≤ airy/bright |
-  | Stem dominance | share of energy per Demucs stem | vocal-led / drum-bass-led / ambient-pad-led / balanced |
-  | Energy, dynamics, distortion | loudness, dynamic range, spectral flatness | — |
+* **Acoustic features** matched against a hand-written prototype for each archetype: key (major/minor), how driving the drums are,
+  how tight they sit on the grid, brightness, which instrument dominates, energy and distortion.
+* **CLAP**, a pretrained audio–text model, scoring the clip against a one-line description of each archetype.
 
-* **Archetype.** Twelve of those features (scaled 0–1) are matched against hand-written prototypes for eight archetypes: **party**
-  (EDM / club), **euphoric** (upbeat pop), **chill** (lofi / ambient), **melancholic** (introspective acoustic), **dark_synth** (dark
-  synthwave), **aggressive** (metal / trap), **groove** (funk / house) and **cinematic** (epic / orchestral). CLAP, a pretrained audio-text
-  model, scores the clip against a one-line description of each, and the two opinions are averaged 50/50. Two calibration details mattered:
-  CLAP is very confident (80 %+ on one label), so its scores are softened with a temperature of 2, and the eight descriptions are worded
-  in parallel, because when only one of them said "pop *song*", CLAP picked it for every track with vocals.
-* **Lyrics as a modifier.** Whisper transcribes the separated vocals and a sentiment model rates them. An upbeat archetype with mostly
-  negative lyrics is flagged **bittersweet**, which shifts the palette towards cold blue.
-* **Dramatic beat changes.** At each section boundary we compare 3 s before and after (drum level, drum-hit rate, bass level, tempo).
-  If the biggest change is ≥ 0.5, that section starts a completely new image instead of evolving from the previous one.
-* **Behaviour profiles.** Every archetype has a motion profile: a set of overrides for the animation settings. Each section blends the
-  profiles of its top two archetypes, using 60 % the song's scores and 40 % the section's own sound, so a quiet breakdown inside an
-  upbeat song can lean towards *chill*. The settings morph frame by frame during transitions, so the motion style changes without a cut.
+Whisper transcribes the vocals and a sentiment model rates them. An upbeat song with mostly negative lyrics is marked **bittersweet**,
+which shifts the colours towards cold blue.
 
-  | Profile | What it looks like |
-  |---|---|
-  | party | hard 15 % beat zoom, 8–12 mirror segments, fast full-wheel colour changes, sharp white flashes, high contrast |
-  | euphoric | bouncy, bright and saturated, moderate flashes |
-  | chill | slow drift, gentle camera sway, only 4–6 segments, brightness breathes with loudness, no flashes, palette stays put |
-  | melancholic | minimal: slow rotation, muted saturation, very fine ripples, long 3.5 s transitions |
-  | dark_synth | moody and steady: high contrast, slow colour drift, deep swirl |
-  | aggressive | chaotic: the image shatters into 12×12 tiles and spins erratically on drum hits, lots of jittery particles |
-  | groove | bouncy: the centre swells with the bass, thick stretching lines, swinging camera |
-  | cinematic | deep: fast continuous zoom, big swirling transitions, slow brightness swells, dusty particles |
+Each section blends the motion profiles of its top two archetypes, so a quiet breakdown in an upbeat song can calm down.
 
-### C. Generative images (sections 10–11.1)
+### Motion profiles
 
-* **Prompts** are built from four components, each picked by a documented rule:
+| Profile | What it looks like |
+|---|---|
+| party | hard beat zooms, many mirror segments, fast colour changes, sharp white flashes |
+| euphoric | bouncy, bright and saturated, moderate flashes |
+| chill | slow drift, gentle camera sway, few segments, no flashes |
+| melancholic | minimal: slow rotation, muted colours, long transitions |
+| dark_synth | moody and steady: high contrast, slow colour drift, deep swirl |
+| aggressive | chaotic: the image shatters into tiles and spins on drum hits |
+| groove | bouncy: the centre swells with the bass, thick lines, swinging camera |
+| cinematic | deep: fast zoom, big swirling transitions, slow brightness swells |
 
-  | Component | Chosen by | Examples |
-  |---|---|---|
-  | Artistic medium | archetype | party → *retro-futuristic cyberpunk neon vector art*; chill → *grainy pastel risograph illustration*; melancholic → *chiaroscuro oil painting, muted charcoal* |
-  | Subject & geometry | section energy × section rhythm | high + driving → *intricate mandala of fractured crystal prisms*; low + sustained → *drifting liquid nebula with botanical flora* |
-  | Colour palette | key mode × brightness, + an accent from the dominant stem | minor + dark → *deep indigo, midnight obsidian, teal accents*; major + bright → *radiant amber, electric magenta, sun-drenched gold* |
-  | Lighting & texture | section brightness × how irregular the onsets are | dark → *volumetric fog, soft bioluminescence*; bright → *laser bloom, crisp specular highlights* |
+### Images
 
-  Plus a fixed `N-fold symmetry, centered on dark background` so the renderer can animate the image around its centre. Each component is
-  one short phrase: SD-Turbo reads at most 77 tokens and responds best to a few concrete words, and the notebook checks no prompt is cut off.
-* **SD-Turbo** (a distilled Stable Diffusion 2.1) makes 512×512 images in 2 steps, about 6 s each on a MacBook. Section 1 is
-  generated from text; later sections are generated **image-to-image from the previous section** (strength 0.6) so the artwork evolves,
-  except after a dramatic beat change, where it starts fresh. Every prompt, seed and setting is saved to `tables/prompts.csv`.
-* **Movable parts.** Each image is split into a core, an inner star and an outer ring (by distance from the centre), a line-art layer
-  (edge detection) and a "light spots" layer (its brightest pixels), so different parts can follow different instruments.
+Each prompt has four parts, each chosen by a rule:
+
+| Part | Chosen by | Example |
+|---|---|---|
+| Art style | archetype | party → *retro-futuristic cyberpunk neon vector art* |
+| Subject | section energy and rhythm | high and driving → *intricate mandala of fractured crystal prisms* |
+| Colours | key and brightness | minor and dark → *deep indigo, midnight obsidian, teal accents* |
+| Lighting | brightness and rhythm | dark → *volumetric fog, soft bioluminescence* |
+
+The first section's image is generated from text. Later sections start from the previous image so the artwork evolves, unless there was
+a big beat change, in which case they start fresh. All prompts and seeds are saved to `tables/prompts.csv`.
 
 <p align="center">
   <img src="outputs/demo_track/figures/layers.png" width="650" alt="Each section image split into parts, line art and light spots">
 </p>
 
-### D. Animation (sections 12–14)
+### Animation
 
-The renderer never touches the audio. It reads one row of the control timeline per frame and turns it into visual parameters with simple,
-inspectable formulas. The default **psychedelic** style:
+Every frame is drawn from the timeline with simple formulas. In the default style:
 
-| Effect | What you see | Driven by |
-|---|---|---|
-| Endless zoom | the view keeps zooming into the pattern; new rings keep appearing from the centre | speed: loudness; surges on every beat |
-| Kick → zoom punch | the view punches in on every **kick** (2–15 % depending on the profile) and eases back; the centre swells | kick hits (beat grid if there is no kick) |
-| Snare → accents | on every **snare** (the backbeat) the kaleidoscope twists a few degrees, a white flash, light spots and line art flare | snare hits |
-| Hi-hats → sparkle | hi-hats only add particles, so they never trigger the big effects | hi-hat hits + high band |
-| Vocals → bloom | the inner star glows magenta on each vocal phrase | vocal accents |
-| Kaleidoscope | the image is folded into mirrored wedges that rotate and slide | wedges: mid band; sliding: "other" instruments |
-| Instruments in the design | core / inner star / outer ring lines glow **orange / magenta / cyan** as loud as **bass / vocals / other**; a ring blooms when its instrument enters; the number of mirror segments changes when instruments enter or leave | instrument stems + entrances/exits |
-| Light spots | the image's bright spots flare and change colour | drum hits |
-| Colour cycling | colours swing around the image's own palette: across the whole wheel for *party*, barely at all for *melancholic* | speed: loudness; a step on drum hits |
-| Morph transitions | the next section's image melts in (brightest parts first) with a swirl; no hard cuts | length from the section's profile (1–3.5 s), shorter at a dramatic beat change |
-| Profile extras | tile shatter + erratic spins (*aggressive*), camera sway (*chill*, *groove*), centre swelling with the bass, thick lines (*groove*) | behaviour profile |
-| Brightness, saturation, sharpness, particles, flashes | overall intensity and detail | RMS, spectral centroid, high band, onsets |
+| Music | What you see |
+|---|---|
+| Loudness | endless zoom speed, brightness, colour cycling speed |
+| Kick | zoom punch and the centre swells |
+| Snare | kaleidoscope twist, white flash, light spots flare |
+| Hi-hats | sparkling particles |
+| Vocals | the inner star glows magenta |
+| Bass / vocals / other | core / inner star / outer ring glow orange / magenta / cyan |
+| Instrument enters or leaves | a ring blooms and the number of mirror segments changes |
+| New section | the next image melts in with a swirl, no hard cuts |
 
-Event effects (beats, hits) swell in over about 2 frames instead of one, because single-frame jumps looked like cuts. Finally, FFmpeg
-adds the original audio back and the notebook checks that the video and audio are both exactly 30 s.
+Set `VISUAL_STYLE = "modes"` for an alternative style where each shape family has its own motion.
 
-**Visual styles.** `VISUAL_STYLE = "modes"` switches to an alternative where each shape family has its own motion:
-kaleidoscope, zoom, shockwave, shatter, spin, sway and liquid flow.
+### Evaluation
 
-### E. Evaluation (sections 15–17)
+* **Baseline:** same images and effects, but all levels are constant, pulses fire every 0.7 s (deliberately not the song's tempo),
+  and sections change at equal intervals.
+* **Alignment metrics** are measured on the rendered frames, not on our own parameters. Motion is the average change between consecutive
+  frames. We correlate it with the audio, and we measure **event-locked contrast**: motion right at each kick, snare or vocal accent
+  divided by motion just before it. Above 1 means the picture visibly reacts, and the baseline should stay near 1.
+* **Ground-truth test:** we synthesized the demo track, so we know every beat, hit, section and instrument change, and we score the
+  analysis against them.
 
-* **Baseline.** Same song, images, renderer and effect types, and the song-level behaviour profile held constant. Every continuous
-  control is a constant mid value, pulses repeat on a fixed 0.7 s timer (deliberately not the song's tempo), sections change at equal
-  time intervals, and no instrument changes or profile switches happen.
-* **Technical checks** on the *rendered frames*, not on our own parameters (correlating RMS with a brightness setting computed from RMS
-  would just be true by construction):
-  * visual motion energy = mean absolute difference between consecutive frames;
-  * Pearson / Spearman correlation of motion energy with onset strength, RMS and the drum/bass stems, for both videos (crossfades excluded);
-  * the time lag at which onsets and motion line up best;
-  * **event-locked contrast**: the average motion right at each kick / snare / vocal accent divided by the motion just before it
-    (> 1 = the picture visibly reacts to that kind of event; the baseline should stay near 1);
-  * QA: beats map to pulses, transitions sit on section boundaries, video length = audio length.
-* **Survey design.** A within-subjects A/B test: each participant watches both versions (neutral labels, order counterbalanced) and rates
-  synchronization (primary outcome), reflecting musical changes, connection to the audio and visual appeal on 1–5, then picks the one
-  that represents the music better. The notebook writes an empty response template and analyses it (means, paired differences,
-  Wilcoxon signed-rank test) once responses are entered. **No survey data has been collected yet.**
+## Results
 
----
+Three 30-second clips: the demo track and two real songs (see [`sample_inputs/README.md`](sample_inputs/README.md)).
 
-## Results so far
-
-Three 30 s clips: the demo track and two songs that are not in the repo (see [`sample_inputs/README.md`](sample_inputs/README.md)).
-
-| | Demo track | Naïka – *BARELY, BARELY* (0:28–0:58) | Twenty One Pilots – *Drag Path* (1:45–2:15) |
+| | Demo track | Naïka – *BARELY, BARELY* | Twenty One Pilots – *Drag Path* |
 |---|---|---|---|
 | Tempo / key | 117.5 BPM, A minor | 136 BPM, D# major | 96 BPM, E major |
-| Rhythm / brightness / stems | driving, balanced, drum/bass-led | groove, balanced, drum/bass-led | groove, dark, ambient/pad-led |
-| **Archetype** (runner-up) | **party** (groove) | **groove** (euphoric) + bittersweet lyrics | **euphoric** (cinematic) |
-| Section profiles | dark_synth → groove → party → dark_synth | euphoric → groove → groove → groove | euphoric → **chill → chill** (breakdown) → euphoric |
-| Medium | retro-futuristic cyberpunk neon vector art | retro 70s funk poster, bold screen print | vibrant pop-art illustration, glossy render |
-| Palette | violet, deep teal and silver | coral, turquoise and warm gold, fading into cold blue | warm amber, burgundy and soft gold |
-| Dramatic beat changes | 8.0 s, 16.4 s, 24.0 s | 9.0 s | 11.3 s, 21.1 s |
-| Instrument changes | 5 | 21 | 9 |
+| **Archetype** (runner-up) | **party** (groove) | **groove** (euphoric), bittersweet lyrics | **euphoric** (cinematic) |
+| Section profiles | dark_synth → groove → party → dark_synth | euphoric → groove → groove → groove | euphoric → chill → chill → euphoric |
+| Art style | cyberpunk neon vector art | 70s funk poster | pop-art illustration |
 | **Onset ↔ motion r** (audio vs. baseline) | **0.76** vs. 0.00 | **0.36** vs. −0.12 | **0.42** vs. 0.01 |
-| RMS ↔ motion r (audio vs. baseline) | 0.33 vs. −0.07 | 0.43 vs. −0.15 | **0.69** vs. 0.15 |
-| **Kick-locked contrast** (audio vs. baseline) | 1.25× vs. 0.97× | **1.43×** vs. 0.84× | **1.85×** vs. 1.10× |
-| Snare-locked contrast (audio vs. baseline) | 1.07× vs. 0.99× | 1.20× vs. 0.80× | 1.21× vs. 0.89× |
-| Vocal-accent-locked contrast (audio vs. baseline) | (no vocals) | 0.96× vs. 0.93× | 1.44× vs. 0.92× |
-
-<p align="center">
-  <img src="outputs/demo_track/figures/archetype.png" width="900" alt="Feature vector, archetype scores and instrument tags for the demo track">
-</p>
-
-**What we take from this:**
-
-* On every clip, frame-to-frame motion follows the note/drum onsets more closely in the audio-driven video than in the baseline. That
-  is the main sign that the synchronization works as designed. On *Drag Path* the best match is at 0 ms lag.
-* The effect is stronger on the clean electronic demo than on the real pop songs. On the real songs the sync improved a lot once
-  the drum track was split into kick, snare and hi-hats. Before that, every effect fired on every drum hit and every note onset,
-  including hi-hats and vocal syllables, so the accents a listener follows were buried in clutter. Naïka's onset correlation went from
-  0.21 to 0.36, and both songs now show a clear jump right on each kick (1.4–1.9× vs. about 1× for the baseline).
-* Snares get a smaller but visible reaction (a twist + flash, ~1.2×). Vocal accents only register on *Drag Path*: on Naïka the
-  vocals are almost continuous, so the slow glow barely changes from one frame to the next.
-* The three clips now get three different archetypes, and with them different media, palettes and motion. Inside *Drag Path*, the
-  breakdown where drums and bass drop out is classified as *chill*, so the motion calms down there and picks up again after.
-* Images within one song can still look alike: sections 2–4 of Naïka barely change, because image-to-image at strength 0.6 keeps most
-  of the previous composition when the prompts are similar.
-* **Ground-truth check on the demo:** we know the kick and bass enter at 8 s and leave at 24 s, and the detector finds exactly those
-  instrument changes. The 16 s boundary (hi-hats join) is a borderline case: its change score is exactly at the 0.5 threshold, and
-  tiny differences in the instrument separation flip it between "dramatic" and "smooth".
-* There is a confound in the RMS numbers: louder sections get busier images, and busier images change more per frame even under the
-  baseline's fixed motion. That's why we treat the **onset** correlation as the fairer synchronization test.
-* Making the transitions smoother (no cuts) cost some measured beat-locking on the real songs. It's a real trade-off between a calmer,
-  more "lo-fi loop" look and a punchier one.
-
-These are implementation checks, not proof that people *perceive* better synchronization. That is what the survey is for.
+| Loudness ↔ motion r | 0.33 vs. −0.07 | 0.43 vs. −0.15 | 0.69 vs. 0.15 |
+| **Kick contrast** | 1.25× vs. 0.97× | **1.43×** vs. 0.84× | **1.85×** vs. 1.10× |
+| Snare contrast | 1.07× vs. 0.99× | 1.20× vs. 0.80× | 1.21× vs. 0.89× |
+| Vocal contrast | (no vocals) | 0.96× vs. 0.93× | 1.44× vs. 0.92× |
 
 <p align="center">
   <img src="outputs/demo_track/figures/alignment.png" width="750" alt="Motion energy vs onset strength for both videos, and the cross-correlation">
 </p>
 
----
+**What we learned:**
 
-## Models and tools
+* On every clip, motion follows the music much more closely in the audio-driven video than in the baseline.
+* The effect is strongest on the clean electronic demo. On the real songs, sync improved a lot once kicks, snares, hi-hats and vocals
+  each got their own effect instead of everything firing on every hit.
+* Each clip got a different archetype, and with it a different style, palette and motion. The *Drag Path* breakdown is correctly
+  classified as *chill*.
+* The ground-truth test matches tempo, hit timing, sections and instrument changes. The kick/snare/hi-hat **labels** are often wrong,
+  which is why the snare reaction is the weakest result. This is the main open issue.
+* We treat the onset correlation as the fairer test, because louder sections also get busier images, which inflates the loudness numbers.
+* Smoother transitions cost some beat-locking. It's a trade-off between a calmer look and a punchier one.
 
-| Model | Used for | Notes |
-|---|---|---|
-| `stabilityai/sd-turbo` | section images (text-to-image and image-to-image) | 512×512, 2–4 steps; check the Stability AI community license before publishing images |
-| Demucs `htdemucs` | splitting drums / bass / vocals / other | runs on CPU (Apple MPS lacks an operation it needs), ~15 s per clip |
-| `laion/clap-htsat-unfused` | zero-shot archetype and instrument tags | averaged over 10 s windows; softmax temperature 2 |
-| `openai/whisper-small` | transcribing the vocal track | can mishear sung lyrics (it heard "drag path" as "dry path") |
-| `cardiffnlp/twitter-roberta-base-sentiment-latest` | positive / neutral / negative lyrics | we first tried a DistilBERT model, but it crashed on our Mac with PyTorch 2.14 |
+These numbers show the system works as designed. They don't prove that people *perceive* better synchronization; testing that with viewers is a next step.
+
+## Models
+
+| Model | Used for |
+|---|---|
+| `stabilityai/sd-turbo` | generating the section images |
+| Demucs `htdemucs` | splitting drums, bass, vocals and other |
+| `laion/clap-htsat-unfused` | archetype and instrument tags |
+| `openai/whisper-small` | transcribing the vocals |
+| `cardiffnlp/twitter-roberta-base-sentiment-latest` | lyric sentiment |
 
 Plus librosa, NumPy, SciPy, pandas, OpenCV, Matplotlib, Hugging Face `diffusers` / `transformers`, and FFmpeg via `imageio-ffmpeg`.
+Check the Stability AI community license before publishing generated images.
 
----
+## Main settings
 
-## Main settings you might want to change
-
-All in the configuration cell (section 3) of the notebook:
+All in the configuration cell (section 2):
 
 | Setting | Default | What it does |
 |---|---|---|
-| `SONG`, `SAMPLE_SONGS` | `"demo_track"` | which input file to use and where its 30 s clip starts |
-| `VISUAL_STYLE` | `psychedelic` | or `modes` for one motion style per shape family |
-| `ARCHETYPE_OVERRIDE` | auto | force an archetype (party, euphoric, chill, melancholic, dark_synth, aggressive, groove, cinematic) |
-| `SECTION_PROFILE_WEIGHT` | 0.4 | how far a section's own sound can pull its motion profile away from the song's |
-| `CLAP_TEMPERATURE` | 2.0 | how much CLAP's confidence is softened before averaging with the acoustic profile |
-| `PROFILES` (section 9.4) | — | the eight behaviour profiles; edit these to change how each archetype moves |
-| `N_SECTIONS`, `MIN_SECTION_SEC` | 4, 4.5 s | how many analysis sections, and their minimum length |
-| `DRAMATIC_THRESHOLD` | 0.5 | how big a beat change must be to switch to a new image and shape |
-| `IMG2IMG_STRENGTH` | 0.6 | how much each section's image may differ from the previous one |
-| `VIS` | — | default animation settings (the profiles override a subset of them) |
-| `VIS["soft_attack_sec"]` | 0.12 s | how gently hits swell in (lower = punchier, higher = smoother) |
-| `FORCE_REGENERATE` | `False` | regenerate images even if cached ones exist |
-
----
+| `SONG`, `SAMPLE_SONGS` | `"demo_track"` | input file and clip start |
+| `VISUAL_STYLE` | `psychedelic` | or `modes` |
+| `ARCHETYPE_OVERRIDE` | auto | force an archetype |
+| `SECTION_PROFILE_WEIGHT` | 0.4 | how much a section's own sound changes its motion |
+| `CLAP_TEMPERATURE` | 2.0 | how much CLAP's confidence is softened |
+| `N_SECTIONS`, `MIN_SECTION_SEC` | 4, 4.5 s | number of sections and their minimum length |
+| `DRAMATIC_THRESHOLD` | 0.5 | how big a beat change must be to start a new image |
+| `IMG2IMG_STRENGTH` | 0.6 | how much each image may differ from the previous one |
+| `VIS`, `PROFILES` | — | animation settings and the eight motion profiles (section 14) |
+| `FORCE_REGENERATE` | `False` | regenerate images even if cached |
 
 ## Limitations
 
-* **Nothing here is trained or validated on labelled data.** The archetype prototypes, behaviour profiles, thresholds and visual
-  mappings are design choices that we tuned by eye on three clips. A CNN on mel-spectrograms or an LSTM over time would need a dataset of
-  songs labelled by archetype, which we don't have, so CLAP stands in as the pretrained model. Real songs also mix archetypes, which is
-  why each section blends two profiles.
-* **Features are proxies.** Beat tracking can lock onto half or double tempo, the key estimate can be wrong for ambiguous harmony, and
-  instrument separation leaks between tracks ("other" lumps several instruments together).
-* **The frequency-to-size mapping** (big, slow shapes for bass, small, fast detail for highs) is inspired by wavelength, but the shapes
-  don't physically represent sound waves.
-* **Sections are change points**, not verses or choruses, and dramatic changes are only checked at section boundaries.
-* **SD-Turbo follows prompts loosely**: it picks up the medium and palette well, the subject words less reliably.
-* **Three clips is a tiny test set.** The real-song results are much weaker than the demo's, and the survey has not been run.
+* **Nothing is trained on labelled data.** Archetypes, profiles and thresholds are design choices tuned by eye on three clips.
+* **Features are estimates.** Beat tracking can lock onto half or double tempo, key detection can be wrong, and instruments leak
+  between separated tracks.
+* **Sections are change points**, not verses or choruses.
+* **Drum labels are the weak link**, as the ground-truth test shows.
+* **SD-Turbo follows prompts loosely**: it gets the style and colours right more often than the subject.
+* **Three clips is a tiny test set**, and we have not tested with viewers yet.
+* **Scope:** only 3–4 images per song, and all motion comes from warping them. No frame-by-frame diffusion, real-time rendering or 3D.
 
 ## Future work
 
-* Run the survey and report the paired comparison.
-* Try more songs and genres, ideally with a few hand-labelled archetypes to check the classifier against.
+* Run a viewer survey comparing the two versions.
+* Test more songs and genres, with some hand-labelled archetypes to check the classifier.
 * Train a small archetype classifier on CLAP embeddings once labelled data exists.
-* Use segmentation masks (e.g. Segment Anything) to animate arbitrary objects in an image, not just rings around the centre.
+* Use segmentation masks (e.g. Segment Anything) to animate any object in an image, not just rings around the centre.
 
----
+## Modification log
 
-## How we built it
+We built the project one milestone at a time, then improved it in a loop: render, measure, change one thing, measure again.
 
-We followed our architecture guide one milestone at a time (audio → features → sections → prompts → images → animation → baseline →
-evaluation), then iterated on the look after watching the results. Each iteration followed the same loop: render, measure, find what is
-wrong, change one thing, measure again. The notebook records every change where it happens as a short **Experiment note**
-(*measured → changed → result*), and section 18 collects all twelve in one table (e.g. onset aliasing, CLAP calibration, and splitting
-the drums into kick / snare / hi-hats).
-
----
+| # | Problem | Change | Result |
+|---|---|---|---|
+| 1 | motion lagged onsets by 250 ms | keep onset peaks when resampling to 24 fps | lag 0 ms |
+| 2 | frames washed out to white | softer edges, fewer light spots | clean frames |
+| 3 | images looked alike across songs | song-based seeds, chained images, archetype prompts | three distinct styles |
+| 4 | the demo's drop at 24 s was missed | use the largest single change, not the sum | detected |
+| 5 | too many instrument changes | smoothing + 2 s minimum | matches the demo's ground truth |
+| 6 | sentiment model crashed | switched to RoBERTa | lyrics analysis works |
+| 7 | every song came out "euphoric" | soften CLAP + consistent label wording | party, groove, euphoric |
+| 8 | transitions and hits looked like cuts | softer attack, longer morphs | smooth, at some cost to sync |
+| 9 | colour cycling erased each palette | colours swing around the song's palette | palettes stay recognizable |
+| 10 | real songs felt out of sync | separate effects for kick, snare, hi-hat, vocals | Naïka onset r 0.21 → 0.36 |
+| 11 | snares were invisible | snare twist + flash | 1.20× vs 0.80× baseline |
+| 12 | analysis never checked against known answers | ground-truth test + test report | drum labels found to be the open issue |
 
 ## References
 
@@ -402,12 +286,12 @@ the drums into kick / snare / hi-hats).
 
 **Software and documentation**
 
-* Hugging Face Diffusers: https://huggingface.co/docs/diffusers (text-to-image, image-to-image and SDXL-Turbo pipelines)
+* Hugging Face Diffusers: https://huggingface.co/docs/diffusers
 * Hugging Face Transformers: https://huggingface.co/docs/transformers
 * Bradski, G. (2000). The OpenCV library. *Dr. Dobb's Journal of Software Tools.* https://opencv.org
-* FFmpeg: https://ffmpeg.org (bundled through `imageio-ffmpeg`)
+* FFmpeg: https://ffmpeg.org
 
 **Inspiration**
 
 * python-audio-reactive-visualizer (LibROSA + OpenCV): https://github.com/actionoise/python-audio-reactive-visualizer
-* Deforum Stable Diffusion (no longer maintained; used only as inspiration): https://github.com/deforum/deforum-stable-diffusion
+* Deforum Stable Diffusion: https://github.com/deforum/deforum-stable-diffusion
