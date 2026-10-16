@@ -30,11 +30,13 @@ Gen_AI_Visualizer/
 ├── genai_audio_visualizer.ipynb  ← the whole project, run top to bottom
 ├── requirements.txt
 ├── sample_inputs/                ← input clips (see sample_inputs/README.md)
-└── outputs/<song>/               ← one folder per song
-    ├── videos/                   ← visualizer.mp4 and baseline.mp4
-    ├── images/                   ← generated section images
-    ├── figures/                  ← plots from the notebook
-    └── tables/                   ← features, prompts, sections, metrics, test report
+└── outputs/
+    ├── all_songs.csv             ← every song's results side by side (Section 25)
+    └── <song>/                   ← one folder per song
+        ├── videos/               ← visualizer.mp4 and baseline.mp4
+        ├── images/               ← generated section images
+        ├── figures/              ← plots from the notebook
+        └── tables/               ← features, prompts, sections, metrics, test report
 ```
 
 There are no separate scripts. The two real songs are copyrighted, so their audio and videos are not in the repo. Each run also
@@ -75,11 +77,11 @@ section detection reacts to.
 | **B. Song understanding** | 9–14 | Find 3–4 sections where the music changes. Classify the song into one of eight archetypes (party, euphoric, chill, melancholic, dark_synth, aggressive, groove, cinematic). Flag big beat changes between sections. Give each section a motion profile. |
 | **C. Images** | 15–17 | Build one prompt per section and generate 3–4 images with SD-Turbo. Split each image into parts (core, inner star, outer ring, line art, light spots) that can move separately. |
 | **D. Animation** | 18–21 | Animate the images from the per-frame timeline and add the original audio back. |
-| **E. Evaluation** | 22–25 | Render the baseline, measure audio–visual alignment, and test the analysis against the demo track's known answers. |
-| **F. Wrap-up** | 26–28 | Results summary, test report and conclusion. |
+| **E. Evaluation** | 22–24 | Render the baseline, measure audio–visual alignment, and test the analysis against the demo track's known answers. |
+| **F. Wrap-up** | 25–27 | Results summary (with every song side by side), test report and conclusion. |
 
 All settings are in the configuration cell (section 2). Every `check(...)` line in the notebook is a test that prints `[PASS]`,
-`[WARN]` or `[FAIL]`. Pipeline tests stop the run when something is broken; quality tests only warn. Section 27 collects them in
+`[WARN]` or `[FAIL]`. Pipeline tests stop the run when something is broken; quality tests only warn. Section 26 collects them in
 `tables/test_report.csv`.
 
 ### Song understanding
@@ -120,7 +122,8 @@ Each prompt has four parts, each chosen by a rule:
 | Lighting | brightness and rhythm | dark → *volumetric fog, soft bioluminescence* |
 
 The first section's image is generated from text. Later sections start from the previous image so the artwork evolves, unless there was
-a big beat change, in which case they start fresh. All prompts and seeds are saved to `tables/prompts.csv`.
+a big beat change, in which case they start fresh. When a section's subject changes, it is allowed to differ more from the previous
+image, so the new subject actually shows. All prompts and seeds are saved to `tables/prompts.csv`.
 
 <p align="center">
   <img src="outputs/demo_track/figures/layers.png" width="650" alt="Each section image split into parts, line art and light spots">
@@ -163,10 +166,10 @@ Three 30-second clips: the demo track and two real songs (see [`sample_inputs/RE
 | **Archetype** (runner-up) | **party** (groove) | **groove** (euphoric), bittersweet lyrics | **euphoric** (cinematic) |
 | Section profiles | dark_synth → groove → party → dark_synth | euphoric → groove → groove → groove | euphoric → chill → chill → euphoric |
 | Art style | cyberpunk neon vector art | 70s funk poster | pop-art illustration |
-| **Onset ↔ motion r** (audio vs. baseline) | **0.76** vs. 0.00 | **0.36** vs. −0.12 | **0.42** vs. 0.01 |
-| Loudness ↔ motion r | 0.33 vs. −0.07 | 0.43 vs. −0.15 | 0.69 vs. 0.15 |
-| **Kick contrast** | 1.25× vs. 0.97× | **1.43×** vs. 0.84× | **1.85×** vs. 1.10× |
-| Snare contrast | 1.07× vs. 0.99× | 1.20× vs. 0.80× | 1.21× vs. 0.89× |
+| **Onset ↔ motion r** (audio vs. baseline) | **0.76** vs. 0.00 | **0.37** vs. −0.12 | **0.42** vs. 0.01 |
+| Loudness ↔ motion r | 0.33 vs. −0.07 | 0.49 vs. −0.11 | 0.69 vs. 0.15 |
+| **Kick contrast** | 1.25× vs. 0.97× | **1.42×** vs. 0.86× | **1.85×** vs. 1.10× |
+| Snare contrast | 1.07× vs. 0.99× | 1.17× vs. 0.80× | 1.21× vs. 0.89× |
 | Vocal contrast | (no vocals) | 0.96× vs. 0.93× | 1.44× vs. 0.92× |
 
 <p align="center">
@@ -214,6 +217,7 @@ All in the configuration cell (section 2):
 | `N_SECTIONS`, `MIN_SECTION_SEC` | 4, 4.5 s | number of sections and their minimum length |
 | `DRAMATIC_THRESHOLD` | 0.5 | how big a beat change must be to start a new image |
 | `IMG2IMG_STRENGTH` | 0.6 | how much each image may differ from the previous one |
+| `IMG2IMG_STRENGTH_NEW_SUBJECT` | 0.8 | the same, when the section's subject changes |
 | `VIS`, `PROFILES` | — | animation settings and the eight motion profiles (section 14) |
 | `FORCE_REGENERATE` | `False` | regenerate images even if cached |
 
@@ -253,6 +257,7 @@ We built the project one milestone at a time, then improved it in a loop: render
 | 10 | real songs felt out of sync | separate effects for kick, snare, hi-hat, vocals | Naïka onset r 0.21 → 0.36 |
 | 11 | snares were invisible | snare twist + flash | 1.20× vs 0.80× baseline |
 | 12 | analysis never checked against known answers | ground-truth test + test report | drum labels found to be the open issue |
+| 13 | Naïka's sections 2–4 looked almost the same (similarity 0.92–0.93) | image-to-image strength 0.8 when a section's subject changes | similarity 0.63–0.72; each section shows its own subject |
 
 ## References
 
