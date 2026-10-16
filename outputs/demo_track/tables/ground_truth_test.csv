@@ -1,0 +1,10 @@
+test,truth,measured,score,result
+tempo,120 BPM,117.5 BPM,error 2.1% (target <= 4%),PASS
+beats (8-30 s),44 events,28 detected,"P 1.00, R 0.64, F1 0.78 (target F1 >= 0.8)",WARN
+"drum hits, any kind",128 events,140 detected,"P 0.91, R 1.00, F1 0.96 (target F1 >= 0.8)",PASS
+label: kick,32 events,75 detected,"P 0.43, R 1.00, F1 0.60 (target F1 >= 0.8)",WARN
+label: snare / clap,8 events,54 detected,"P 0.00, R 0.00, F1 0.00 (target F1 >= 0.8)",WARN
+label: hi-hat,96 events,11 detected,"P 1.00, R 0.11, F1 0.21 (target F1 >= 0.8)",WARN
+section boundaries,3 events,3 detected,"P 1.00, R 1.00, F1 1.00 (target F1 >= 1.0)",PASS
+dramatic beat changes,2 events,3 detected,"P 0.67, R 1.00, F1 0.80 (target F1 >= 0.8)",PASS
+instrument changes,"other enters 0s, drums enters 8s, bass enters 8s, bass leaves 24s","other enters 0.5s, drums enters 7.6s, bass enters 8.2s, bass leaves 24.3s, drums leaves 29.8s","P 0.80, R 1.00, F1 0.89 (target F1 >= 0.8)",PASS
