@@ -9,7 +9,7 @@ opencv-python
 pillow
 imageio-ffmpeg   # bundles an ffmpeg binary, so no system ffmpeg is needed
 
-# Image generation (SD-Turbo). Uses CUDA on Colab, MPS on Apple silicon, CPU otherwise.
+# Image generation (SD-Turbo). Uses an NVIDIA GPU (CUDA), Apple silicon (MPS) or the CPU.
 torch
 diffusers
 transformers
