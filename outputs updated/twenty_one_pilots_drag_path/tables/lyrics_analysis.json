@@ -1,0 +1,14 @@
+{
+  "source": "user",
+  "note": "user-supplied clip lyrics; no inferred timing",
+  "text": "A drag path etched in the surface\n              Can you find me?",
+  "clip_start": 105.0,
+  "clip_duration": 30.0,
+  "segments_clip_relative": [],
+  "sentiment": {
+    "neutral": 0.7560606598854065,
+    "negative": 0.13763363659381866,
+    "positive": 0.10630571842193604
+  },
+  "bittersweet": false
+}

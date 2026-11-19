@@ -1,0 +1,13 @@
+{
+  "detected": {
+    "tonic_pc": 11,
+    "mode": "major",
+    "confidence": 0.8371904631974596
+  },
+  "resolved": {
+    "tonic_pc": 4,
+    "mode": "major",
+    "confidence": 1.0
+  },
+  "chords_constrained_to_key": false
+}

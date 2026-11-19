@@ -1,0 +1,10 @@
+property,measured,used for,source,detected_before_override
+archetype,euphoric (runner-up cinematic),audio-derived motion profile; automatic look when no preset is supplied,audio,euphoric
+visual_preset,carved_clay,optional medium only; original subjects/lighting; no motion override,artist,
+tonality,E major,colour palette family (prompt),artist,B major
+brightness,dark (1484 Hz),shared palette brightness + original brightness/rhythm lighting,audio,
+rhythmic drive,"groove (2.3 hits/s, 15.3 dB crest)",subject geometry (prompt),audio,
+stem dominance,balanced,palette accent (prompt),audio,
+lyrics,-,-,artist,
+tempo,95.0 BPM,6-fold symmetry,artist,95.703125
+audio fingerprint,seed 148960,section seeds 148961..148964,audio,

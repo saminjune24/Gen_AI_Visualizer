@@ -1,0 +1,101 @@
+{
+  "song_title": {
+    "setting": "song_title",
+    "value": "Drag Path",
+    "source": "artist",
+    "detected_value": null,
+    "note": ""
+  },
+  "artist_name": {
+    "setting": "artist_name",
+    "value": "Twenty One Pilots",
+    "source": "artist",
+    "detected_value": null,
+    "note": ""
+  },
+  "colors": {
+    "setting": "colors",
+    "value": [
+      "#e53935",
+      "#f9a620",
+      "#5c6bc0",
+      "#9e9e9e"
+    ],
+    "source": "artist",
+    "detected_value": "artist_palette",
+    "note": "Shared numeric frame palette and duration-weighted section summary; one colors format at a time."
+  },
+  "bpm": {
+    "setting": "bpm",
+    "value": 95.0,
+    "source": "artist",
+    "detected_value": 95.703125,
+    "note": ""
+  },
+  "key": {
+    "setting": "key",
+    "value": 4,
+    "source": "artist",
+    "detected_value": 11,
+    "note": ""
+  },
+  "mode": {
+    "setting": "mode",
+    "value": "major",
+    "source": "artist",
+    "detected_value": "major",
+    "note": ""
+  },
+  "section_boundaries": {
+    "setting": "section_boundaries",
+    "value": [
+      0.0,
+      11.377777777777778,
+      16.068208616780044,
+      21.106938775510205,
+      30.0
+    ],
+    "source": "audio",
+    "detected_value": [
+      0.0,
+      11.377777777777778,
+      16.068208616780044,
+      21.106938775510205,
+      30.0
+    ],
+    "note": ""
+  },
+  "section_labels": {
+    "setting": "section_labels",
+    "value": [
+      "section 1",
+      "section 2",
+      "section 3",
+      "section 4"
+    ],
+    "source": "default",
+    "detected_value": null,
+    "note": ""
+  },
+  "song_archetype": {
+    "setting": "song_archetype",
+    "value": "euphoric",
+    "source": "audio",
+    "detected_value": "euphoric",
+    "note": "Audio-derived interpretation; visual presets never force motion profiles."
+  },
+  "visual_preset": {
+    "setting": "visual_preset",
+    "value": "carved_clay",
+    "source": "artist",
+    "detected_value": null,
+    "note": "Optional medium only; None uses original MEDIUM[archetype]. Subjects, lighting and motion stay audio-derived."
+  },
+  "lyrics": {
+    "setting": "lyrics",
+    "value": "A drag path etched in the surface\n              Can you find me?",
+    "source": "artist",
+    "detected_value": null,
+    "note": "Context for existing sentiment model only; no inferred word timing."
+  }
+}

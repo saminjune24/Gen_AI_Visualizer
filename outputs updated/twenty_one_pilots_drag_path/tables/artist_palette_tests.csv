@@ -1,0 +1,73 @@
+test,passed
+"eight public fields: song information, visual preset and colors",True
+all optional public fields remain None by default,True
+partial configuration: key,True
+partial configuration: mode,True
+partial configuration: visual_preset,True
+partial configuration: colors,True
+partial configuration: bpm,True
+partial configuration: lyrics,True
+invalid or removed bpm rejected: 0,True
+invalid or removed bpm rejected: True,True
+invalid or removed mode rejected: 'dorian',True
+invalid or removed key rejected: 'G minor',True
+invalid or removed colors rejected: ['not-a-color'],True
+"invalid or removed colors rejected: (0, 360)",True
+"invalid or removed colors rejected: [210, 330]",True
+invalid or removed motion_intensity rejected: 1.0,True
+"invalid or removed lyrics rejected: [{'start': 0, 'end': 2, 'text': 'x'}]",True
+removed mood is rejected rather than ignored,True
+removed song_archetype is rejected rather than ignored,True
+removed art_style is rejected rather than ignored,True
+removed lighting_style is rejected rather than ignored,True
+removed visual_theme is rejected rather than ignored,True
+documented visual preset neon_filigree accepted,True
+neon_filigree contains only a medium string,True
+documented visual preset painted_ribbons accepted,True
+painted_ribbons contains only a medium string,True
+documented visual preset carved_clay accepted,True
+carved_clay contains only a medium string,True
+documented visual preset glass_facets accepted,True
+glass_facets contains only a medium string,True
+original medium table covers every audio archetype,True
+original nine subject branches are retained,True
+enharmonic key normalization,True
+blank text returns to automatic,True
+documented range cool accepted,True
+documented range warm accepted,True
+documented range blue accepted,True
+documented range purple accepted,True
+documented range pink accepted,True
+documented range green accepted,True
+manual lyrics bypass vocal gate and ASR,True
+Circle of Fifths advances by 30 degrees,True
+automatic hues start from absolute pitch mapping,True
+chords retain all three semantic tones,True
+progression changes dynamic hue anchors,True
+section swatches are actual rendered-palette samples,True
+mode changes saturation/value without changing hues,True
+tone permutation does not reorder spatial anchors,True
+silence produces finite invisible colors,True
+hue interpolation takes the short wraparound path,True
+manual hues stay inside permitted family arc,True
+manual palette differs from automatic A-minor green/red,True
+source-pixel manual palette constraint preserves brightness,True
+neutral highlights survive manual hue constraint,True
+wraparound range constrains every anchor,True
+range and palette cannot conflict in a single field,True
+legacy harmonic CSV columns retained,True
+continuous evidence and event controls have explicit independent names,True
+section 1 prompt samples trace back to frame palette,True
+section 2 prompt samples trace back to frame palette,True
+section 3 prompt samples trace back to frame palette,True
+section 4 prompt samples trace back to frame palette,True
+original or artist-selected medium survives every prompt,True
+section 1 uses the original energy/rhythm subject,True
+section 1 uses original brightness/rhythm lighting,True
+section 2 uses the original energy/rhythm subject,True
+section 2 uses original brightness/rhythm lighting,True
+section 3 uses the original energy/rhythm subject,True
+section 3 uses original brightness/rhythm lighting,True
+section 4 uses the original energy/rhythm subject,True
+section 4 uses original brightness/rhythm lighting,True
+geometry survives every fitted prompt,True
