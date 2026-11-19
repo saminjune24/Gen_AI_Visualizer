@@ -1,0 +1,13 @@
+setting,value,source,detected_value,note
+song_title,Drag Path,artist,,
+artist_name,Twenty One Pilots,artist,,
+colors,"['#e53935', '#f9a620', '#5c6bc0', '#9e9e9e']",artist,artist_palette,Shared numeric frame palette and duration-weighted section summary; one colors format at a time.
+bpm,95.0,artist,95.703125,
+key,4,artist,11,
+mode,major,artist,major,
+section_boundaries,"[0.0, 11.377777777777778, 16.068208616780044, 21.106938775510205, 30.0]",audio,"[0.0, 11.377777777777778, 16.068208616780044, 21.106938775510205, 30.0]",
+section_labels,"['section 1', 'section 2', 'section 3', 'section 4']",default,,
+song_archetype,euphoric,audio,euphoric,Audio-derived interpretation; visual presets never force motion profiles.
+visual_preset,carved_clay,artist,,"Optional medium only; None uses original MEDIUM[archetype]. Subjects, lighting and motion stay audio-derived."
+lyrics,"A drag path etched in the surface
+              Can you find me?",artist,,Context for existing sentiment model only; no inferred word timing.

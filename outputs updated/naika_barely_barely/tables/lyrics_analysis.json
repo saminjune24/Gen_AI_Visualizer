@@ -1,0 +1,14 @@
+{
+  "source": "user",
+  "note": "user-supplied clip lyrics; no inferred timing",
+  "text": "I fear it might be true. Let down my guard for you, do-do.\n              There's nothing I can do, do. And I know, and I know that the days go by,\n              My love grows strong and I get high on it. I'm barely, barely surviving\n              And I know it might be a bit too late To speak my mind, but I'm not minding it,\n              I'm barely, barely, Barely, barely, barely surviving",
+  "clip_start": 28.0,
+  "clip_duration": 30.0,
+  "segments_clip_relative": [],
+  "sentiment": {
+    "neutral": 0.4936574697494507,
+    "negative": 0.3899819552898407,
+    "positive": 0.11636055260896683
+  },
+  "bittersweet": false
+}

@@ -1,0 +1,33 @@
+{
+  "song_title": "Drag Path",
+  "artist_name": "Twenty One Pilots",
+  "evaluation_version": "continuous-onset-fixed-events-v3",
+  "palette_version": "artist-directed-palette-v2",
+  "render_version": "original-first-artist-v1",
+  "event_source": "detected_events_NOT_independent_ground_truth",
+  "onset_target": "onset_strength_continuous",
+  "stem_method": "Demucs htdemucs",
+  "image_generation": [
+    "stabilityai/sd-turbo",
+    "stabilityai/sd-turbo",
+    "stabilityai/sd-turbo",
+    "stabilityai/sd-turbo"
+  ],
+  "artist_controls": {
+    "song_title": "Drag Path",
+    "artist_name": "Twenty One Pilots",
+    "lyrics": "A drag path etched in the surface\n              Can you find me?",
+    "key": "E",
+    "mode": "major",
+    "bpm": 95,
+    "visual_preset": "carved_clay",
+    "colors": [
+      "#E53935",
+      "#F9A620",
+      "#5C6BC0",
+      "#9E9E9E"
+    ]
+  },
+  "visual_preset": "carved_clay",
+  "preset_version": "original-prompts-material-presets-v2"
+}

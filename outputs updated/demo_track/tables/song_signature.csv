@@ -1,0 +1,10 @@
+property,measured,used for,source,detected_before_override
+archetype,party (runner-up groove),audio-derived motion profile; automatic look when no preset is supplied,audio,party
+visual_preset,neon_filigree,optional medium only; original subjects/lighting; no motion override,artist,
+tonality,A minor,colour palette family (prompt),artist,A minor
+brightness,balanced (1645 Hz),shared palette brightness + original brightness/rhythm lighting,audio,
+rhythmic drive,"driving (4.3 hits/s, 15.2 dB crest)",subject geometry (prompt),audio,
+stem dominance,drum/bass-led,palette accent (prompt),audio,
+lyrics,-,-,default,
+tempo,120.0 BPM,10-fold symmetry,artist,117.45383522727273
+audio fingerprint,seed 478433,section seeds 478434..478437,audio,

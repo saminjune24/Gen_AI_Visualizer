@@ -1,0 +1,5 @@
+instrument,initially_active,boundary_guard_sec
+drums,True,0.6
+bass,True,0.6
+other,True,0.6
+vocals,True,0.6

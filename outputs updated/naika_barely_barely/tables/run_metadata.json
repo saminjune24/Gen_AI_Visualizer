@@ -1,0 +1,32 @@
+{
+  "song_title": "Barely, Barely",
+  "artist_name": "Naika",
+  "evaluation_version": "continuous-onset-fixed-events-v3",
+  "palette_version": "artist-directed-palette-v2",
+  "render_version": "original-first-artist-v1",
+  "event_source": "detected_events_NOT_independent_ground_truth",
+  "onset_target": "onset_strength_continuous",
+  "stem_method": "Demucs htdemucs",
+  "image_generation": [
+    "stabilityai/sd-turbo",
+    "stabilityai/sd-turbo",
+    "stabilityai/sd-turbo",
+    "stabilityai/sd-turbo"
+  ],
+  "artist_controls": {
+    "song_title": "Barely, Barely",
+    "artist_name": "Naika",
+    "lyrics": "I fear it might be true. Let down my guard for you, do-do.\n              There's nothing I can do, do. And I know, and I know that the days go by,\n              My love grows strong and I get high on it. I'm barely, barely surviving\n              And I know it might be a bit too late To speak my mind, but I'm not minding it,\n              I'm barely, barely, Barely, barely, barely surviving",
+    "key": "G",
+    "mode": "minor",
+    "bpm": 103,
+    "visual_preset": "painted_ribbons",
+    "colors": [
+      "blue",
+      "purple",
+      "pink"
+    ]
+  },
+  "visual_preset": "painted_ribbons",
+  "preset_version": "original-prompts-material-presets-v2"
+}

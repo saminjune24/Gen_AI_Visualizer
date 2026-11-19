@@ -1,0 +1,22 @@
+test,passed
+quiet background movement is slower,True
+quiet passages reduce particles,True
+"quiet passages reduce emission, not base-image exposure",True
+kick pulse has no parameter pre-echo,True
+isolated kick remains visible over a quiet background,True
+distinct snare_pulse control remains effective,True
+distinct hat_pulse control remains effective,True
+distinct vocal_pulse control remains effective,True
+manual colors do not disable kick response,True
+silence gate suppresses every rendered layer,True
+finite RGB output: psychedelic/kaleidoscope,True
+finite RGB output: modes/kaleidoscope,True
+finite RGB output: modes/spin,True
+finite RGB output: modes/sway,True
+finite RGB output: modes/zoom,True
+finite RGB output: modes/shockwave,True
+finite RGB output: modes/shatter,True
+finite RGB output: modes/flow,True
+baseline does not consume audio event timeline,True
+evaluation uses continuous signal,True
+every version shares evaluation definition,True

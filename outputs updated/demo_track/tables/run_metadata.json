@@ -1,0 +1,28 @@
+{
+  "song_title": "demo_track",
+  "artist_name": "",
+  "evaluation_version": "continuous-onset-fixed-events-v3",
+  "palette_version": "artist-directed-palette-v2",
+  "render_version": "original-first-artist-v1",
+  "event_source": "synthetic_ground_truth",
+  "onset_target": "onset_strength_continuous",
+  "stem_method": "Demucs htdemucs",
+  "image_generation": [
+    "stabilityai/sd-turbo",
+    "stabilityai/sd-turbo",
+    "stabilityai/sd-turbo",
+    "stabilityai/sd-turbo"
+  ],
+  "artist_controls": {
+    "song_title": null,
+    "artist_name": null,
+    "lyrics": null,
+    "key": "A",
+    "mode": "minor",
+    "bpm": 120,
+    "visual_preset": "neon_filigree",
+    "colors": null
+  },
+  "visual_preset": "neon_filigree",
+  "preset_version": "original-prompts-material-presets-v2"
+}
