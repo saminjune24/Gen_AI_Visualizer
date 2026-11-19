@@ -1,0 +1,10 @@
+feature,measured,class
+tempo,120.0 BPM (resolved; detector 117.5),
+tonality,"resolved: A minor; detected: A minor (detector fit r = 0.91, gap 0.34)",resolved color context; measured key: A minor
+transient density,4.3 drum hits/s,
+transient sharpness,15.2 dB crest factor,
+grid tightness,0.57,loose / live
+rhythmic drive,,driving
+brightness,1645 Hz spectral centroid,balanced
+stem energy shares,"drums 76%, bass 15%, other 9%, vocals 0%",drum/bass-led
+energy / dynamics,"-23.8 dBFS mean, 18.4 dB range",
