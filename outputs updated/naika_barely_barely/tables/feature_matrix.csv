@@ -1,0 +1,10 @@
+feature,measured,class
+tempo,103.0 BPM (resolved; detector 136.0),
+tonality,"resolved: G minor; detected: D# major (detector fit r = 0.59, gap 0.08)",resolved color context; measured key: D# major
+transient density,2.5 drum hits/s,
+transient sharpness,13.3 dB crest factor,
+grid tightness,0.59,loose / live
+rhythmic drive,,groove
+brightness,1886 Hz spectral centroid,balanced
+stem energy shares,"drums 47%, bass 17%, other 8%, vocals 28%",drum/bass-led
+energy / dynamics,"-14.5 dBFS mean, 17.2 dB range",

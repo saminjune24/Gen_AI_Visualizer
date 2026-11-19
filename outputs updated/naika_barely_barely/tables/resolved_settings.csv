@@ -1,0 +1,16 @@
+setting,value,source,detected_value,note
+song_title,"Barely, Barely",artist,,
+artist_name,Naika,artist,,
+colors,"['#0000ff', '#800080', '#ffc0cb']",artist,artist_palette,Shared numeric frame palette and duration-weighted section summary; one colors format at a time.
+bpm,103.0,artist,135.99917763157896,
+key,7,artist,3,
+mode,minor,artist,major,
+section_boundaries,"[0.0, 9.009342403628118, 17.438185941043084, 24.427392290249433, 30.0]",audio,"[0.0, 9.009342403628118, 17.438185941043084, 24.427392290249433, 30.0]",
+section_labels,"['section 1', 'section 2', 'section 3', 'section 4']",default,,
+song_archetype,groove,audio,groove,Audio-derived interpretation; visual presets never force motion profiles.
+visual_preset,painted_ribbons,artist,,"Optional medium only; None uses original MEDIUM[archetype]. Subjects, lighting and motion stay audio-derived."
+lyrics,"I fear it might be true. Let down my guard for you, do-do.
+              There's nothing I can do, do. And I know, and I know that the days go by,
+              My love grows strong and I get high on it. I'm barely, barely surviving
+              And I know it might be a bit too late To speak my mind, but I'm not minding it,
+              I'm barely, barely, Barely, barely, barely surviving",artist,,Context for existing sentiment model only; no inferred word timing.

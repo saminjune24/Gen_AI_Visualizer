@@ -1,0 +1,10 @@
+property,measured,used for,source,detected_before_override
+archetype,groove (runner-up euphoric),audio-derived motion profile; automatic look when no preset is supplied,audio,groove
+visual_preset,painted_ribbons,optional medium only; original subjects/lighting; no motion override,artist,
+tonality,G minor,colour palette family (prompt),artist,D# major
+brightness,balanced (1886 Hz),shared palette brightness + original brightness/rhythm lighting,audio,
+rhythmic drive,"groove (2.5 hits/s, 13.3 dB crest)",subject geometry (prompt),audio,
+stem dominance,drum/bass-led,palette accent (prompt),audio,
+lyrics,-,-,artist,
+tempo,103.0 BPM,8-fold symmetry,artist,135.99917763157896
+audio fingerprint,seed 698645,section seeds 698646..698649,audio,

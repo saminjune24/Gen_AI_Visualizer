@@ -1,0 +1,100 @@
+{
+  "song_title": {
+    "setting": "song_title",
+    "value": "Barely, Barely",
+    "source": "artist",
+    "detected_value": null,
+    "note": ""
+  },
+  "artist_name": {
+    "setting": "artist_name",
+    "value": "Naika",
+    "source": "artist",
+    "detected_value": null,
+    "note": ""
+  },
+  "colors": {
+    "setting": "colors",
+    "value": [
+      "#0000ff",
+      "#800080",
+      "#ffc0cb"
+    ],
+    "source": "artist",
+    "detected_value": "artist_palette",
+    "note": "Shared numeric frame palette and duration-weighted section summary; one colors format at a time."
+  },
+  "bpm": {
+    "setting": "bpm",
+    "value": 103.0,
+    "source": "artist",
+    "detected_value": 135.99917763157896,
+    "note": ""
+  },
+  "key": {
+    "setting": "key",
+    "value": 7,
+    "source": "artist",
+    "detected_value": 3,
+    "note": ""
+  },
+  "mode": {
+    "setting": "mode",
+    "value": "minor",
+    "source": "artist",
+    "detected_value": "major",
+    "note": ""
+  },
+  "section_boundaries": {
+    "setting": "section_boundaries",
+    "value": [
+      0.0,
+      9.009342403628118,
+      17.438185941043084,
+      24.427392290249433,
+      30.0
+    ],
+    "source": "audio",
+    "detected_value": [
+      0.0,
+      9.009342403628118,
+      17.438185941043084,
+      24.427392290249433,
+      30.0
+    ],
+    "note": ""
+  },
+  "section_labels": {
+    "setting": "section_labels",
+    "value": [
+      "section 1",
+      "section 2",
+      "section 3",
+      "section 4"
+    ],
+    "source": "default",
+    "detected_value": null,
+    "note": ""
+  },
+  "song_archetype": {
+    "setting": "song_archetype",
+    "value": "groove",
+    "source": "audio",
+    "detected_value": "groove",
+    "note": "Audio-derived interpretation; visual presets never force motion profiles."
+  },
+  "visual_preset": {
+    "setting": "visual_preset",
+    "value": "painted_ribbons",
+    "source": "artist",
+    "detected_value": null,
+    "note": "Optional medium only; None uses original MEDIUM[archetype]. Subjects, lighting and motion stay audio-derived."
+  },
+  "lyrics": {
+    "setting": "lyrics",
+    "value": "I fear it might be true. Let down my guard for you, do-do.\n              There's nothing I can do, do. And I know, and I know that the days go by,\n              My love grows strong and I get high on it. I'm barely, barely surviving\n              And I know it might be a bit too late To speak my mind, but I'm not minding it,\n              I'm barely, barely, Barely, barely, barely surviving",
+    "source": "artist",
+    "detected_value": null,
+    "note": "Context for existing sentiment model only; no inferred word timing."
+  }
+}

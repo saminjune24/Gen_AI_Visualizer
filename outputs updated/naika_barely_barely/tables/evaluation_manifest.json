@@ -1,0 +1,33 @@
+{
+  "version": "continuous-onset-fixed-events-v3",
+  "onset_target": "continuous spectral flux, original robust normalization, centered peak-preserving max filter",
+  "event_control": "causal onset_event_pulse; never the correlation target",
+  "pixels": "all videos decoded through the same 128px grayscale measurement",
+  "event_source": "detected_events_NOT_independent_ground_truth",
+  "guard_sec": 1.75,
+  "fps": 24,
+  "stem_method": "Demucs htdemucs",
+  "audio_sha256": "b73bc4bd56e38163ac95e278ad3be9a86ad9b69b707129da95660f218ad3a5ad",
+  "mask_sha256": "d54b8824fa47cf57adf1d1d482f64e0a878271db089f438f906de41885458503",
+  "palette_version": "artist-directed-palette-v2",
+  "drum_generic_policy": "diagnostic",
+  "render_look_version": "original-first-artist-v1",
+  "render_look": {
+    "palette_mix_default": 0.4,
+    "emissive_gain": 1.0,
+    "quiet_motion_floor": 0.18,
+    "quiet_emission_floor": 0.15
+  },
+  "palette_mix": 0.4,
+  "numpy": "2.4.6",
+  "librosa": "0.11.0",
+  "opencv": "4.14.0",
+  "reference_video": null,
+  "reference_video_sha256": null,
+  "image_sha256": [
+    "1c273f3a42d29f899f91f4c959bb69dbe4005bbfd5c16274b6dbd63d64326eae",
+    "a84ba9ff8f2e2acd85ce3e86471c73cf7ea403284d956a40deff6975dd0899d6",
+    "edf03f8cdfa8f98ff494cd2e4b6ab1d089e5647be6a2a0ab815abb5f7b5dc6ed",
+    "ad3a0c6db8954032f23317c572b2cae73c6f5c3a1f038c339d6f38ac6c2167b0"
+  ]
+}
