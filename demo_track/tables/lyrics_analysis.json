@@ -1,0 +1,10 @@
+{
+  "source": "none",
+  "note": "Whisper skipped: no vocals detected",
+  "text": "",
+  "clip_start": 0.0,
+  "clip_duration": 30.0,
+  "segments_clip_relative": [],
+  "sentiment": {},
+  "bittersweet": false
+}

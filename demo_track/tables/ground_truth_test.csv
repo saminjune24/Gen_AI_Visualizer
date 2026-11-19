@@ -1,0 +1,11 @@
+test,truth,measured,score,measurement_source,result
+tempo,120 BPM,117.5 BPM (unconstrained estimate),error 2.1% (target <= 4%),audio analysis,PASS
+beats (8-30 s),44 events,28 detected,"P 1.00, R 0.64, F1 0.78 (target F1 >= 0.8)",audio with artist BPM guidance,WARN
+"drum hits, any kind",128 events,128 detected,"P 1.00, R 1.00, F1 1.00 (target F1 >= 0.8)",audio analysis,PASS
+label: kick,32 events,32 detected,"P 1.00, R 1.00, F1 1.00 (target F1 >= 0.8)",audio analysis,PASS
+label: snare / clap,8 events,19 detected,"P 0.42, R 1.00, F1 0.59 (target F1 >= 0.8)",audio analysis,WARN
+label: hi-hat (including overlaps),112 events,112 detected,"P 1.00, R 1.00, F1 1.00 (target F1 >= 0.8)",audio analysis,PASS
+detected section boundaries (before artist override),3 events,3 detected,"P 1.00, R 1.00, F1 1.00 (target F1 >= 1.0)",audio analysis,PASS
+dramatic beat changes,2 events,2 detected,"P 1.00, R 1.00, F1 1.00 (target F1 >= 0.8)",audio analysis,PASS
+initial instrument presence,"{'drums': False, 'bass': False, 'other': True, 'vocals': False}","{'drums': False, 'bass': False, 'other': True, 'vocals': False}",4/4 correct,audio analysis,PASS
+instrument changes,3 interior transitions,3 uncensored detections,"P 0.67, R 0.67, F1 0.67; clip-edge presence scored separately",audio analysis,WARN
