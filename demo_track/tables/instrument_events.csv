@@ -1,5 +1,0 @@
-time_sec,instrument,change,boundary_censored
-0.3333333333333333,other,enters,True
-8.041666666666666,drums,enters,False
-8.291666666666666,bass,enters,False
-24.541666666666668,bass,leaves,False
